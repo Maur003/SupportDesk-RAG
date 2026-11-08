@@ -1,0 +1,11 @@
+---
+synthetic: true
+company: Northline Telecom
+access_level: public
+doc_slug: network-status-codes
+title: Network status codes
+---
+
+# Network status codes
+
+Code OL-GREEN means the optical link is up. Code OL-RED means the optical link is down. Code BANNER-OPEN means the app is showing a neighborhood outage. Customers can quote these codes in chat. Agents record the code on the ticket. These codes do not include approval limits.

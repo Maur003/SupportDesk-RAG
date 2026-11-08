@@ -1,0 +1,38 @@
+[project]
+name = "supportdesk"
+version = "0.1.0"
+description = "Synthetic Northline Telecom support agent. Retrieval and evaluation land in later phases."
+requires-python = ">=3.11"
+dependencies = [
+    "fastapi==0.162.2",
+    "uvicorn==0.54.0",
+    "pydantic-settings==2.16.2",
+    "SQLAlchemy==2.1.8",
+    "psycopg[binary]==3.3.8",
+    "pgvector==0.5.1",
+    "alembic==1.20.1",
+    "pypdf==7.0.0",
+    "sentence-transformers==6.2.0",
+]
+
+[project.optional-dependencies]
+dev = ["pytest==9.2.0", "httpx==0.28.1", "ruff==0.17.4"]
+
+[build-system]
+requires = ["setuptools>=68"]
+build-backend = "setuptools.build_meta"
+
+[tool.setuptools.packages.find]
+where = ["src"]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+pythonpath = ["src"]
+
+[tool.ruff]
+target-version = "py311"
+line-length = 100
+src = ["src", "tests", "alembic"]
+
+[tool.ruff.lint]
+select = ["E", "F", "I", "UP"]
