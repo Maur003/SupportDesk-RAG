@@ -1,6 +1,6 @@
 # Decisions
 
-Measured impact is recorded only when a script in this repo printed the number. Until `make eval` exists, the impact line says so.
+Measured impact is recorded only when a script in this repo printed the number. Until that command exists, the impact line says so.
 
 ## Phase 1
 
@@ -18,7 +18,7 @@ Ten of the thirty answerable questions are reserved for the author. The rest, pl
 
 ### How later tables will be reported
 
-Comparison tables will include `n` and per-question wins, losses, and ties. A gap of one or two questions is reported as that count and is not called an improvement. The judge model is a different id from the generator, at temperature 0. Both ids are configuration, and Phase 2 verifies them with `client.models.list()` before the first call. Measured impact: not measured yet.
+Comparison tables will include `n` and per-question wins, losses, and ties. A gap of one or two questions is reported as that count and is not called an improvement. The judge model is a different id from the generator, at temperature 0. Both ids are configuration. The first Gemini call verifies both ids with `client.models.list()` before use. Phase 2 does not call Gemini. Measured impact: not measured yet.
 
 ### Cache order
 
@@ -63,11 +63,11 @@ The first corpus was 52 documents and 57 chunks, mostly one chunk per file, so a
 
 ### Canaries on write-off and executive credits
 
-`WRITEOFF_CANARY_8HN4` is only in `finance/write-off-policy.md`. `EXECUTIVE_CANARY_2VX6` is only in `finance/executive-credits.md`. `p04` and `p05` use those strings the same way `p01` and `p03` use the older canaries. A test counts each canary in exactly one file. Trade-off: the trap is "was the hidden string retrieved," not a graded essay. Measured impact: not measured until retrieval exists.
+`WRITEOFF_CANARY_8HN4` is only in `finance/write-off-policy.md`. `EXECUTIVE_CANARY_2VX6` is only in `finance/executive-credits.md`. `p04` and `p05` use those strings the same way `p01` and `p03` use the older canaries. A test counts each canary in exactly one file. Trade-off: the trap is "was the hidden string retrieved," not a graded essay. Measured impact: `permission_trap` n=5, vector leak 0.0000, random leak 0.0000, 5 ties. The random pool is already limited to chunks that role may see, so the tie means the SQL filter also stayed off the forbidden chunk.
 
 ### How results tables will be reported
 
-Every results table includes the corpus size, meaning the chunk count in the manifest, and a random-retrieval row. That row draws `k` chunks uniformly from the chunks the role may see, with a fixed seed, and scores them with the same metric. `recall@20` is not a headline number. The cutoff that matches the context window is `recall@5`. A wider cutoff is shown only next to the corpus size, because 20 out of 57 and 20 out of a few hundred are different claims. Wins, losses, ties, and `n` still sit beside any percentage. Measured impact: not measured until `make eval` exists. No baseline number is filled in before that.
+Every results table includes the corpus size, meaning the chunk count in the manifest, and a random-retrieval row. That row draws `k` chunks uniformly from the chunks the role may see, with a fixed seed, and scores them with the same metric. `recall@20` is not a headline number. The cutoff that matches the context window is `recall@5`. A wider cutoff is shown only next to the corpus size, because 20 out of 57 and 20 out of a few hundred are different claims. Wins, losses, ties, and `n` still sit beside any percentage. Measured impact: the first `make eval` printout is in the README. The random row sorts chunk ids before the draw, so seed 0 does not follow a Postgres scan.
 
 ### Pinned tokenizer, caches, and the lock split
 
@@ -77,6 +77,18 @@ Every results table includes the corpus size, meaning the chunk count in the man
 
 `httpx2==2.16.0` and `httpcore2==2.16.0` stay in the runtime lock. `pip show` reports that `huggingface_hub` 2.4.0 requires `httpx2`, and `httpx2` requires `httpcore2`. They are a different project from `httpx`. Removing them breaks the tokenizer download. They are not an extra HTTP client we chose.
 
-### Phase 2 embedding input
+### Phase 2 baseline retrieval
 
-Phase 2 will embed `embedding_input(title, heading_path, text)` from `src/supportdesk/embed_text.py`: the document title, the heading path, and the chunk text, joined by newlines. Empty parts are skipped. `chunks.text` stays the body only. Citations and the gold-fact check use that column, not the embedded string. The generated tsvector already concatenates `heading_path` and `text`. Phase 2 will add the document title to that tsvector so keyword search sees the same fields. Trade-off: the vector is not the citation string, so a later check that a citation was actually retrieved must use the stored text. Measured impact: not measured until retrieval exists. The string is fixed now so Phase 2 does not invent a different concatenation.
+Passages are `embedding_input(title, heading_path, text)`: the document title, the heading path, and the chunk text, joined by newlines. Empty parts are skipped. `chunks.text` stays the body. Citations and the gold-fact check use that column. The query is prefixed with `Represent this sentence for searching relevant passages: `. Both encode calls pass `prompt=""` so a saved sentence-transformers prompt cannot add a second prefix. Vectors are L2-normalized. Distance is pgvector cosine (`<=>`). The access filter is SQL `access_level = ANY(:allowed)`: customer sees public, agent sees public and agent, finance sees all three. There is no HNSW index. Search is an exact order by distance over 280 embedded chunks.
+
+The document title is a real column on `chunks`. A generated tsvector cannot join to `documents`, and keyword search in Phase 3 needs the same fields as the vector. The column is in the chunk hash and in `to_tsvector('english', title || heading_path || text)`. Putting the title into the hash made one re-ingest of the already loaded corpus update all 121 documents and write 280 embeddings. An empty database then printed `inserted` 121, `chunks_written` 280, and `embeddings_written` 280. The next run printed `unchanged` 121 and `embeddings_written` 0.
+
+The random baseline draws k=5 ids with seed 0 from the chunks that role may see, after sorting those ids. Without the sort, truncating and reloading the same chunks changed the random row, because `random.sample` follows list order and the scan order changed. Two `make eval` runs after the sort printed the same table.
+
+`u01`–`u10` are excluded because they are unfilled. Unanswerable questions are not in the recall. There is no generator, so refusal is not scored. A permission leak is 1 when a retrieved id is a labeled support or a labeled fact appears in a retrieved chunk. An absent-hit is 1 when an absent term appears in a retrieved chunk. `precision@5` divides by 5, so one labeled chunk scores at most 0.20.
+
+`make eval` exits if answerable recall@5 is below 0.50, or if the permission or unanswerable vector rate is above 0. That 0.50 is a guard under the measured 0.6310. The README shows the measured table, not the guard.
+
+No new package. sentence-transformers was already installed for the tokenizer. google-genai is not installed.
+
+Trade-off: the vector is not the citation string, and a sequential scan will not show index tuning. The paraphrase and role splits are the reason to keep this baseline before hybrid search. Measured impact, from `python -m supportdesk.eval`, corpus 280, k=5, seed 0, confirmed by a second run: answerable n=42 recall@5 0.6310 versus random 0.0238, wins 26, losses 0, ties 16. Lexical n=20 recall@5 0.9750, MRR 1.0000, wins 19, losses 0, ties 1. The tie is `a16`, which the random draw also found. `a18` recall is 0.5 because one of its two supports was outside the top 5, and that question is a win. Paraphrase n=22 recall@5 0.3182, wins 7, losses 0, ties 15, and all 15 ties are recall 0 for both methods. Customer n=22 recall@5 0.8864, wins 19, losses 0, ties 3. Agent n=10 recall@5 0.4000, wins 4, losses 0, ties 6. Finance n=10 recall@5 0.3000, wins 3, losses 0, ties 7. Those agent and finance ties are misses. Permission leak and unanswerable absent-hit are 0.0000 for both methods, 5 ties each. Seven of 22 paraphrases, and 3 of 10 finance questions, are the counts. They are not a solved retrieval problem.

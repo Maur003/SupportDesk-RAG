@@ -72,6 +72,7 @@ def ingest_prepared(
                         id=chunk.id,
                         doc_id=document.slug,
                         ordinal=chunk.ordinal,
+                        title=document.title,
                         text=chunk.text,
                         heading_path=chunk.heading_path,
                         access_level=document.access_level,
@@ -81,6 +82,7 @@ def ingest_prepared(
                 )
             else:
                 row.ordinal = chunk.ordinal
+                row.title = document.title
                 row.text = chunk.text
                 row.heading_path = chunk.heading_path
                 row.access_level = document.access_level

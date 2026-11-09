@@ -13,8 +13,8 @@ class Settings(BaseSettings):
     """Runtime configuration. Model ids are settings, not literals at the call site.
 
     The judge model must differ from the generator. The judge temperature is fixed
-    at 0. Phase 2 calls client.models.list() and refuses to generate if either id
-    is absent from that response.
+    at 0. The first Gemini call checks both ids with client.models.list() and
+    refuses to generate if either id is absent. This phase does not call Gemini.
     """
 
     model_config = SettingsConfigDict(

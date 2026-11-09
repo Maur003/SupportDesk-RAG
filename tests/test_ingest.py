@@ -47,8 +47,15 @@ def test_reingest_of_the_same_bytes_writes_nothing(db_session) -> None:
     assert document is not None
     assert document.synthetic is True
     assert stored.embedding is None
+    assert stored.title == "sample"
     assert stored.search_vector is not None
     assert stored.access_level == "public"
+    matched = db_session.scalar(
+        select(func.count())
+        .select_from(Chunk)
+        .where(Chunk.search_vector.op("@@")(func.plainto_tsquery("english", "sample")))
+    )
+    assert matched == 1
 
 
 def test_changed_bytes_replace_orphan_chunks(db_session) -> None:

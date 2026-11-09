@@ -3,4 +3,5 @@ def main() -> None:
     print("  python -m alembic upgrade head")
     print("  python -m supportdesk.ingest")
     print("  python -m supportdesk.manifest")
+    print("  python -m supportdesk.eval")
     print("API: python -m uvicorn supportdesk.main:app --reload")

@@ -11,6 +11,6 @@ def document_hash(raw_bytes: bytes) -> str:
     return digest.hexdigest()
 
 
-def chunk_hash(heading_path: str, text: str, access_level: str) -> str:
-    payload = f"{heading_path}\n{text}\n{access_level}".encode()
+def chunk_hash(title: str, heading_path: str, text: str, access_level: str) -> str:
+    payload = f"{title}\n{heading_path}\n{text}\n{access_level}".encode()
     return hashlib.sha256(payload).hexdigest()

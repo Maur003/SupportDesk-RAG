@@ -29,7 +29,9 @@ def prepare_documents(
                 text=draft.text,
                 heading_path=draft.heading_path,
                 token_count=draft.token_count,
-                content_hash=chunk_hash(draft.heading_path, draft.text, document.access_level),
+                content_hash=chunk_hash(
+                    document.title, draft.heading_path, draft.text, document.access_level
+                ),
             )
             for draft in drafts
         )

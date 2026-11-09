@@ -52,6 +52,7 @@ class Chunk(Base):
         ForeignKey("documents.id", ondelete="CASCADE"), nullable=False
     )
     ordinal: Mapped[int] = mapped_column(Integer, nullable=False)
+    title: Mapped[str] = mapped_column(Text, nullable=False)
     text: Mapped[str] = mapped_column(Text, nullable=False)
     heading_path: Mapped[str] = mapped_column(Text, nullable=False)
     access_level: Mapped[str] = mapped_column(access_level_enum, nullable=False)
@@ -64,7 +65,8 @@ class Chunk(Base):
     search_vector: Mapped[str | None] = mapped_column(
         TSVECTOR,
         Computed(
-            "to_tsvector('english', coalesce(heading_path, '') || ' ' || text)",
+            "to_tsvector('english', coalesce(title, '') || ' ' || "
+            "coalesce(heading_path, '') || ' ' || text)",
             persisted=True,
         ),
         nullable=True,

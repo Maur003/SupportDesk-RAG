@@ -5,6 +5,7 @@ from pathlib import Path
 
 from supportdesk.access import allowed_levels
 from supportdesk.config import Settings
+from supportdesk.embed_text import embedding_input
 from supportdesk.ingest.loaders import load_corpus
 from supportdesk.ingest.prepare import prepare_documents
 from supportdesk.ingest.tokenize import HuggingFaceCodec
@@ -84,6 +85,8 @@ def _chunks():
     for document in prepared:
         for chunk in document.chunks:
             assert chunk.token_count <= settings.chunk_token_budget
+            embedded = embedding_input(document.title, chunk.heading_path, chunk.text)
+            assert len(codec.encode(embedded)) + 2 <= 512
             chunks[chunk.id] = (document.access_level, chunk.heading_path, chunk.text)
     return chunks
 
