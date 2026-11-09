@@ -70,6 +70,7 @@ class ToolCall:
     name: str
     arguments: dict
     call_id: str | None = None
+    thought_signature: bytes | None = None
 
 
 @dataclass(frozen=True)
@@ -257,7 +258,8 @@ def _contents(messages: list[dict]) -> list:
                         name=tool_call.name,
                         args=tool_call.arguments,
                         id=tool_call.call_id,
-                    )
+                    ),
+                    thought_signature=tool_call.thought_signature,
                 )
             )
         contents.append(types.Content(role="model" if role == "model" else "user", parts=parts))
@@ -279,10 +281,29 @@ def _turn(response: object) -> ModelTurn:
             name=call.name or "",
             arguments=dict(call.args or {}),
             call_id=call.id,
+            thought_signature=_thought_signature(response),
         ),
         input_tokens=input_tokens,
         output_tokens=output_tokens,
     )
+
+
+def _thought_signature(response: object) -> bytes | None:
+    """Gemini 3 requires this opaque blob on the function-call part we send back."""
+
+    candidates = getattr(response, "candidates", None) or []
+    if not candidates:
+        return None
+    content = getattr(candidates[0], "content", None)
+    parts = getattr(content, "parts", None) or []
+    signed = [part for part in parts if isinstance(getattr(part, "thought_signature", None), bytes)]
+    for part in signed:
+        if getattr(part, "function_call", None) is not None and part.thought_signature:
+            return part.thought_signature
+    for part in signed:
+        if part.thought_signature:
+            return part.thought_signature
+    return None
 
 
 def _usage_count(usage: object, name: str) -> int | None:

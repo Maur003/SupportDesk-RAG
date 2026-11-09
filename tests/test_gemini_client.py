@@ -100,6 +100,77 @@ def test_generate_refuses_when_list_omits_a_configured_model() -> None:
     assert client.models.generate_calls == 0
 
 
+def test_function_call_keeps_the_thought_signature() -> None:
+    client = _Client(["models/gemini-3.8-flash", "models/gemini-2.5-flash"])
+    signature = b"thought-signature"
+    client.models.generate_content = _signed_generate(client.models, signature)
+    llm = GeminiLLM(
+        api_key="unused",
+        generator_model="gemini-3.8-flash",
+        judge_model="gemini-2.5-flash",
+        client=client,
+    )
+    first = llm.generate([{"role": "user", "text": "look up the outage credit"}])
+    assert first.tool_call is not None
+    assert first.tool_call.thought_signature == signature
+    llm.generate(
+        [
+            {"role": "user", "text": "look up the outage credit"},
+            {"role": "model", "text": "", "tool_call": first.tool_call},
+            {
+                "role": "tool",
+                "name": first.tool_call.name,
+                "call_id": first.tool_call.call_id,
+                "content": {"hits": []},
+            },
+        ]
+    )
+    model_part = client.models.last_contents[1].parts[0]
+    assert model_part.thought_signature == signature
+    assert model_part.function_call.name == "search_knowledge_base"
+
+
+def _signed_generate(models, signature: bytes):
+    def generate_content(*, model, contents, config):
+        models.generate_calls += 1
+        models.last_model = model
+        models.last_config = config
+        models.last_contents = contents
+        if models.generate_calls == 1:
+            call = _Call()
+            call.name = "search_knowledge_base"
+            call.args = {"query": "outage credit"}
+            part = _SignedPart(call, signature)
+            return _SignedResponse(part)
+        return _Response(None)
+
+    return generate_content
+
+
+class _SignedPart:
+    def __init__(self, call: _Call, signature: bytes) -> None:
+        self.function_call = call
+        self.thought_signature = signature
+        self.text = None
+
+
+class _SignedContent:
+    def __init__(self, part: _SignedPart) -> None:
+        self.parts = [part]
+
+
+class _SignedCandidate:
+    def __init__(self, part: _SignedPart) -> None:
+        self.content = _SignedContent(part)
+
+
+class _SignedResponse:
+    def __init__(self, part: _SignedPart) -> None:
+        self.text = ""
+        self.function_calls = [part.function_call]
+        self.candidates = [_SignedCandidate(part)]
+
+
 def test_generate_can_target_the_cheap_model() -> None:
     client = _Client(["models/gemini-3.8-flash", "models/gemini-2.5-flash"])
     llm = GeminiLLM(

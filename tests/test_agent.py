@@ -239,18 +239,25 @@ class _DenyTransport(httpx.BaseTransport):
         return httpx.Response(500, text="unavailable")
 
 
-def test_ask_without_a_generator_is_503_and_a_role_field_is_422() -> None:
-    client = TestClient(create_app())
-    missing = client.post("/ask", json={"query": "hello"})
-    assert missing.status_code == 401
-    unconfigured = client.post("/ask", headers=_bearer("customer"), json={"query": "hello"})
-    assert unconfigured.status_code == 503
-    smuggled = client.post(
-        "/ask",
-        headers=_bearer("customer"),
-        json={"query": "hello", "role": "finance"},
-    )
-    assert smuggled.status_code == 422
+def test_ask_without_a_generator_is_503_and_a_role_field_is_422(monkeypatch) -> None:
+    from supportdesk.config import get_settings
+
+    monkeypatch.setenv("GEMINI_API_KEY", "")
+    get_settings.cache_clear()
+    try:
+        client = TestClient(create_app())
+        missing = client.post("/ask", json={"query": "hello"})
+        assert missing.status_code == 401
+        unconfigured = client.post("/ask", headers=_bearer("customer"), json={"query": "hello"})
+        assert unconfigured.status_code == 503
+        smuggled = client.post(
+            "/ask",
+            headers=_bearer("customer"),
+            json={"query": "hello", "role": "finance"},
+        )
+        assert smuggled.status_code == 422
+    finally:
+        get_settings.cache_clear()
 
 
 def test_agent_has_no_confirm_tool_and_does_not_import_the_crm_store() -> None:
