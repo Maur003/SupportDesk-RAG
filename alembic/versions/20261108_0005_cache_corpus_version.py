@@ -17,7 +17,10 @@ depends_on: str | Sequence[str] | None = None
 
 
 def upgrade() -> None:
-    op.add_column("response_cache", sa.Column("corpus_version", sa.String(length=64), nullable=True))
+    op.add_column(
+        "response_cache",
+        sa.Column("corpus_version", sa.String(length=64), nullable=True),
+    )
     op.execute("DELETE FROM response_cache")
     op.alter_column("response_cache", "corpus_version", nullable=False)
     op.create_index(
