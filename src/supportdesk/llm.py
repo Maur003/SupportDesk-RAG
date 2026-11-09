@@ -6,6 +6,8 @@ is turned off, so a tool runs only when this process executes it.
 
 `GuardedLLM` retries 429 and 5xx with the same delay as the CRM client. A timeout
 is not retried. Those failures, and `LLMUnavailable`, open the circuit breaker.
+`generate(..., model=)` selects one listed model id for that call. The default
+is the generator.
 """
 
 import random
@@ -92,18 +94,22 @@ class GeminiLLM:
         self._judge = judge_model
         self._temperature = temperature
         self._models_ok = False
+        self._names: list[str] = []
         if client is None:
             from google import genai
 
             client = genai.Client(api_key=api_key)
         self._client = client
 
-    def generate(self, messages: list[dict]) -> ModelTurn:
+    def generate(self, messages: list[dict], model: str | None = None) -> ModelTurn:
         self._ensure_models()
+        chosen = model or self._generator
+        if not _listed(self._names, chosen):
+            raise ModelError(f"models.list() did not include {chosen}")
         from google.genai import types
 
         response = self._client.models.generate_content(
-            model=self._generator,
+            model=chosen,
             contents=_contents(messages),
             config=types.GenerateContentConfig(
                 temperature=self._temperature,
@@ -123,6 +129,7 @@ class GeminiLLM:
         if missing:
             joined = ", ".join(missing)
             raise ModelError(f"models.list() did not include {joined}")
+        self._names = names
         self._models_ok = True
 
 
@@ -144,20 +151,23 @@ class GuardedLLM:
         self._sleep = sleep
         self._rng = rng
 
-    def generate(self, messages: list[dict]) -> ModelTurn:
+    def generate(self, messages: list[dict], model: str | None = None) -> ModelTurn:
         started = time.perf_counter()
         try:
-            return self._generate(messages)
+            return self._generate(messages, model)
         finally:
             add_llm(time.perf_counter() - started, None, None)
 
-    def _generate(self, messages: list[dict]) -> ModelTurn:
+    def _generate(self, messages: list[dict], model: str | None) -> ModelTurn:
         if not self._breaker.allow():
             raise LLMUnavailable("circuit open")
         last: Exception | None = None
         for attempt in range(self._attempts):
             try:
-                turn = self._inner.generate(messages)
+                if model is None:
+                    turn = self._inner.generate(messages)
+                else:
+                    turn = self._inner.generate(messages, model=model)
             except ModelError:
                 raise
             except LLMUnavailable:

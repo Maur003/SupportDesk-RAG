@@ -1,5 +1,8 @@
 import json
+import time
 import uuid
+from datetime import date
+from decimal import Decimal
 
 from fastapi import Depends, FastAPI, HTTPException
 from fastapi.responses import Response
@@ -12,29 +15,46 @@ from supportdesk.access import allowed_levels
 from supportdesk.agent import REFUSAL, run_agent
 from supportdesk.auth import TokenError, read_role
 from supportdesk.breaker import CircuitBreaker
+from supportdesk.cache import (
+    CacheHit,
+    access_scope,
+    exact_cache_key,
+    lookup_exact,
+    lookup_semantic,
+    store_answer,
+)
+from supportdesk.compress import ContextChunk, compress_context
 from supportdesk.config import get_settings
 from supportdesk.confirmations import ConfirmationStore
 from supportdesk.crm_client import CrmClient, CrmError
 from supportdesk.db import make_engine, make_session_factory
-from supportdesk.embedder import BgeEmbedder
-from supportdesk.llm import GeminiLLM, GuardedLLM
+from supportdesk.embedder import BgeEmbedder, EmbedderError
+from supportdesk.llm import GeminiLLM, GuardedLLM, ModelTurn
 from supportdesk.models import Chunk
 from supportdesk.observe import (
     METRICS_MEDIA_TYPE,
     AppMetrics,
     Trace,
+    add_embed,
     add_retrieval,
     configure_logging,
     current_trace,
     emit,
+    note_cache,
+    note_cost,
     note_error,
+    note_model,
     note_role,
     note_route,
     note_status,
     save_request,
 )
+from supportdesk.pricing import cost_usd
 from supportdesk.reranker import MiniLMReranker
-from supportdesk.retrieve import timed_retrieve
+from supportdesk.retrieve import Retrieval, timed_retrieve
+from supportdesk.routing import choose_model
+
+_UNSET = object()
 
 _bearer = HTTPBearer(auto_error=False)
 
@@ -71,6 +91,8 @@ class AskResponse(BaseModel):
     summary: str | None = None
     account_id: str | None = None
     citations: list[Hit] = Field(default_factory=list)
+    model: str | None = None
+    cache_hit: str | None = None
 
 
 def create_app(
@@ -84,6 +106,10 @@ def create_app(
     llm_breaker: CircuitBreaker | None = None,
     crm_breaker: CircuitBreaker | None = None,
     prefetch_retrieval: bool = True,
+    max_context_tokens: int | None = None,
+    semantic_cache_distance: float | None = None,
+    min_context_score: object = _UNSET,
+    price_as_of: date | None = None,
 ) -> FastAPI:
     app = FastAPI(
         title="SupportDesk RAG",
@@ -98,6 +124,18 @@ def create_app(
     app.state.crm = crm
     app.state.confirmations = confirmations
     app.state.prefetch_retrieval = prefetch_retrieval
+    app.state.max_context_tokens = (
+        settings.max_context_tokens if max_context_tokens is None else max_context_tokens
+    )
+    app.state.semantic_cache_distance = (
+        settings.semantic_cache_distance
+        if semantic_cache_distance is None
+        else semantic_cache_distance
+    )
+    app.state.min_context_score = (
+        settings.min_context_score if min_context_score is _UNSET else min_context_score
+    )
+    app.state.price_as_of = price_as_of
     app.state.llm_breaker = llm_breaker or CircuitBreaker(
         settings.circuit_failure_threshold,
         settings.circuit_reset_seconds,
@@ -162,15 +200,40 @@ def create_app(
         role = _role_from_header(credentials)
         note_role(role)
         llm = _llm(app)
-        citations = _search_hits(app, role, body.query) if app.state.prefetch_retrieval else []
+        settings = get_settings()
+        model_id = choose_model(
+            body.query,
+            simple_max_chars=settings.simple_query_max_chars,
+            cheap_model=settings.cheap_model,
+            generator_model=settings.generator_model,
+        )
+        note_model(model_id)
+        cached, query_vector = _read_cache(app, role, body.query, model_id)
+        if cached is not None:
+            note_status("answered")
+            note_cache(cached.kind)
+            note_cost(Decimal(0))
+            return AskResponse(
+                role=role,
+                status="answered",
+                steps=0,
+                answer=cached.answer,
+                model=model_id,
+                cache_hit=cached.kind,
+            )
+        citations = (
+            _search_hits(app, role, body.query, compress=True, query_vector=query_vector)
+            if app.state.prefetch_retrieval
+            else []
+        )
         if app.state.prefetch_retrieval and not citations:
             note_status("refused")
-            return AskResponse(role=role, status="refused", steps=0, answer=REFUSAL)
+            return AskResponse(role=role, status="refused", steps=0, answer=REFUSAL, model=model_id)
         result = run_agent(
             body.query,
             role,
-            llm=llm,
-            search_fn=lambda query: _search_hits(app, role, query),
+            llm=_bound_model(llm, model_id),
+            search_fn=lambda query: _search_hits(app, role, query, compress=True),
             crm=_crm(app),
             confirmations=_confirmations(app),
             citations=citations,
@@ -178,6 +241,9 @@ def create_app(
         note_status(result.status)
         if result.status == "unavailable":
             note_error("LLMUnavailable")
+        _note_generation_cost(app, model_id)
+        if result.status == "answered" and result.answer:
+            _store_cache(app, role, body.query, model_id, query_vector, result.answer, result.steps)
         return AskResponse(
             role=role,
             status=result.status,
@@ -187,6 +253,7 @@ def create_app(
             summary=result.summary,
             account_id=result.account_id,
             citations=[Hit(**hit) for hit in result.citations],
+            model=model_id,
         )
 
     @app.post("/confirmations/{confirmation_id}")
@@ -308,7 +375,14 @@ def _confirmations(app: FastAPI) -> ConfirmationStore:
     return store
 
 
-def _search_hits(app: FastAPI, role: str, query: str) -> list[dict[str, str]]:
+def _search_hits(
+    app: FastAPI,
+    role: str,
+    query: str,
+    *,
+    compress: bool = False,
+    query_vector: list[float] | None = None,
+) -> list[dict[str, str]]:
     settings = get_settings()
     factory = _session_factory(app)
     with factory() as session:
@@ -319,27 +393,139 @@ def _search_hits(app: FastAPI, role: str, query: str) -> list[dict[str, str]]:
             allowed_levels(role),
             _reranker(app),
             rerank_enabled=settings.rerank_enabled,
+            query_vector=query_vector,
         )
-        hits, retrieved_tokens = _hits(session, found.ids)
+        context = _context(session, found)
         add_retrieval(
             ids=found.ids,
             scores=found.scores,
             embed_seconds=found.embed_seconds,
             search_seconds=found.search_seconds,
             rerank_seconds=found.rerank_seconds,
-            retrieved_tokens=retrieved_tokens,
+            retrieved_tokens=sum(item.tokens for item in context),
         )
-        return [hit.model_dump() for hit in hits]
+        chosen = context
+        if compress:
+            chosen = compress_context(
+                context,
+                max_tokens=app.state.max_context_tokens,
+                min_score=app.state.min_context_score,
+            )
+        return [
+            {"id": item.id, "access_level": item.access_level, "text": item.text} for item in chosen
+        ]
 
 
-def _hits(session: Session, ids: list[str]) -> tuple[list[Hit], int]:
-    if not ids:
-        return [], 0
-    rows = session.scalars(select(Chunk).where(Chunk.id.in_(ids))).all()
-    order = {chunk_id: index for index, chunk_id in enumerate(ids)}
+def _context(session: Session, found: Retrieval) -> list[ContextChunk]:
+    if not found.ids:
+        return []
+    rows = session.scalars(select(Chunk).where(Chunk.id.in_(found.ids))).all()
+    order = {chunk_id: index for index, chunk_id in enumerate(found.ids)}
+    scores = dict(zip(found.ids, found.scores, strict=True))
     rows = sorted(rows, key=lambda row: order[row.id])
-    hits = [Hit(id=row.id, access_level=row.access_level, text=row.text) for row in rows]
-    return hits, sum(row.token_count for row in rows)
+    return [
+        ContextChunk(
+            id=row.id,
+            access_level=row.access_level,
+            text=row.text,
+            score=float(scores[row.id]),
+            tokens=row.token_count,
+        )
+        for row in rows
+    ]
+
+
+def _cache_enabled(app: FastAPI) -> bool:
+    return app.state.session_factory is not None or app.state.prefetch_retrieval
+
+
+def _read_cache(
+    app: FastAPI, role: str, query: str, model_id: str
+) -> tuple[CacheHit | None, list[float] | None]:
+    if not _cache_enabled(app):
+        return None, None
+    scope = access_scope(role)
+    factory = _session_factory(app)
+    key = exact_cache_key(query, scope, model_id)
+    with factory() as session:
+        hit = lookup_exact(session, key, scope, model_id)
+    if hit is not None:
+        return hit, None
+    vector = _query_vector(app, query)
+    if vector is None:
+        return None, None
+    with factory() as session:
+        hit = lookup_semantic(session, vector, scope, model_id, app.state.semantic_cache_distance)
+    return hit, vector
+
+
+def _query_vector(app: FastAPI, query: str) -> list[float] | None:
+    started = time.perf_counter()
+    try:
+        vector = _embedder(app).embed_query(query)
+    except EmbedderError:
+        add_embed(time.perf_counter() - started)
+        return None
+    add_embed(time.perf_counter() - started)
+    return vector
+
+
+def _store_cache(
+    app: FastAPI,
+    role: str,
+    query: str,
+    model_id: str,
+    vector: list[float] | None,
+    answer: str,
+    steps: int,
+) -> None:
+    if not _cache_enabled(app):
+        return
+    factory = _session_factory(app)
+    with factory() as session:
+        store_answer(
+            session,
+            query=query,
+            scope=access_scope(role),
+            model=model_id,
+            embedding=vector,
+            answer=answer,
+            steps=steps,
+        )
+
+
+def _note_generation_cost(app: FastAPI, model_id: str) -> None:
+    trace = current_trace.get()
+    if trace is None:
+        return
+    if trace.llm_input_tokens is None and trace.llm_output_tokens is None:
+        return
+    on = app.state.price_as_of or date.today()
+    try:
+        amount = cost_usd(
+            model_id,
+            trace.llm_input_tokens or 0,
+            trace.llm_output_tokens or 0,
+            on,
+        )
+    except ValueError:
+        return
+    note_cost(amount)
+
+
+class _PinnedModel:
+    def __init__(self, guarded: GuardedLLM, model_id: str) -> None:
+        self._guarded = guarded
+        self.model_id = model_id
+
+    def generate(self, messages: list[dict]) -> ModelTurn:
+        return self._guarded.generate(messages, model=self.model_id)
+
+
+def _bound_model(llm: GuardedLLM, model_id: str) -> object:
+    if isinstance(llm._inner, GeminiLLM):
+        return _PinnedModel(llm, model_id)
+    return llm
 
 
 def _finish(app: FastAPI, trace: Trace) -> None:

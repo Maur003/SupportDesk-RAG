@@ -1,3 +1,5 @@
+from datetime import date
+from decimal import Decimal
 from functools import lru_cache
 
 from pydantic import model_validator
@@ -10,6 +12,17 @@ EMBEDDING_REVISION = "5c38ec7c405ec4b44b94cc5a9bb96e735b38267a"
 # Hub id. model_info resolves the hyphenated L-6 name to this repo.
 RERANK_MODEL = "cross-encoder/ms-marco-MiniLM-L6-v2"
 RERANK_REVISION = "233902d25c440f23af6f7d6e94d2946bac0bee0a"
+# USD per 1,000,000 tokens, read 2026-10-30. gemini-3.8-flash steps up after 2026-12-31.
+PRICE_AS_OF = date(2026, 10, 30)
+GENERATOR_PRICE_UNTIL = date(2026, 12, 31)
+GEMINI_3_8_FLASH = "gemini-3.8-flash"
+GEMINI_2_5_FLASH = "gemini-2.5-flash"
+GEMINI_3_8_FLASH_INPUT_UNTIL = Decimal("0.75")
+GEMINI_3_8_FLASH_OUTPUT_UNTIL = Decimal("3.75")
+GEMINI_3_8_FLASH_INPUT_AFTER = Decimal("1.50")
+GEMINI_3_8_FLASH_OUTPUT_AFTER = Decimal("7.50")
+GEMINI_2_5_FLASH_INPUT = Decimal("0.30")
+GEMINI_2_5_FLASH_OUTPUT = Decimal("2.50")
 
 
 class Settings(BaseSettings):
@@ -19,6 +32,10 @@ class Settings(BaseSettings):
     at 0. A real Gemini generate calls client.models.list() once before
     generate_content and refuses if the generator id or the judge id is absent.
     Automatic function calling stays disabled. Tests inject a fake and do not call Gemini.
+
+    Token prices are the module constants above, not environment variables.
+    A short query uses cheap_model. The exact cache key includes the access scope,
+    and the semantic lookup filters on that same scope.
     """
 
     model_config = SettingsConfigDict(
@@ -37,8 +54,10 @@ class Settings(BaseSettings):
     rerank_revision: str = RERANK_REVISION
     chunk_token_budget: int = 400
     chunk_overlap_tokens: int = 60
-    generator_model: str = "gemini-3.8-flash"
-    judge_model: str = "gemini-2.5-flash"
+    generator_model: str = GEMINI_3_8_FLASH
+    judge_model: str = GEMINI_2_5_FLASH
+    cheap_model: str = GEMINI_2_5_FLASH
+    simple_query_max_chars: int = 80
     judge_temperature: float = 0.0
     gemini_api_key: str = ""
     generator_temperature: float = 0.0
@@ -52,6 +71,9 @@ class Settings(BaseSettings):
     llm_retry_backoff_seconds: float = 0.2
     circuit_failure_threshold: int = 3
     circuit_reset_seconds: float = 30.0
+    semantic_cache_distance: float = 0.05
+    max_context_tokens: int = 2000
+    min_context_score: float | None = None
 
     @model_validator(mode="after")
     def check_models_and_chunks(self) -> "Settings":
@@ -85,6 +107,16 @@ class Settings(BaseSettings):
             raise ValueError("circuit_failure_threshold must be >= 1")
         if self.circuit_reset_seconds < 0:
             raise ValueError("circuit_reset_seconds must be >= 0")
+        if not self.cheap_model.strip():
+            raise ValueError("cheap_model must not be empty")
+        if self.cheap_model == self.generator_model:
+            raise ValueError("cheap_model must be a different model id than generator_model")
+        if self.simple_query_max_chars < 0:
+            raise ValueError("simple_query_max_chars must be >= 0")
+        if self.semantic_cache_distance < 0:
+            raise ValueError("semantic_cache_distance must be >= 0")
+        if self.max_context_tokens < 1:
+            raise ValueError("max_context_tokens must be >= 1")
         _require_commit(self.embedding_revision, "embedding_revision")
         _require_commit(self.rerank_revision, "rerank_revision")
         return self

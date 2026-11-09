@@ -1,13 +1,15 @@
 """One JSON log line and Prometheus counters for each API request.
 
-The line carries the trace id, stage times, retrieved ids, scores, and token
-counts. It does not carry chunk text.
+The line carries the trace id, stage times, retrieved ids, scores, token
+counts, the routed model id, the token cost, and the cache hit kind.
+It does not carry chunk text.
 """
 
 import json
 import logging
 from contextvars import ContextVar
 from dataclasses import dataclass, field
+from decimal import Decimal
 
 from prometheus_client import (
     CONTENT_TYPE_LATEST,
@@ -38,6 +40,9 @@ class Trace:
     llm_input_tokens: int | None = None
     llm_output_tokens: int | None = None
     error_class: str | None = None
+    model: str | None = None
+    cost_usd: float | None = None
+    cache_hit: str | None = None
 
 
 class AppMetrics:
@@ -109,6 +114,30 @@ def note_error(error_class: str) -> None:
         trace.error_class = error_class
 
 
+def note_model(model: str) -> None:
+    trace = current_trace.get()
+    if trace is not None:
+        trace.model = model
+
+
+def note_cache(kind: str) -> None:
+    trace = current_trace.get()
+    if trace is not None:
+        trace.cache_hit = kind
+
+
+def note_cost(amount: Decimal) -> None:
+    trace = current_trace.get()
+    if trace is not None:
+        trace.cost_usd = float(amount.quantize(Decimal("0.00000001")))
+
+
+def add_embed(seconds: float) -> None:
+    trace = current_trace.get()
+    if trace is not None:
+        trace.embed_seconds += seconds
+
+
 def add_retrieval(
     *,
     ids: list[str],
@@ -156,6 +185,9 @@ def payload(trace: Trace) -> dict:
         "llm_input_tokens": trace.llm_input_tokens,
         "llm_output_tokens": trace.llm_output_tokens,
         "error_class": trace.error_class,
+        "model": trace.model,
+        "cost_usd": None if trace.cost_usd is None else round(trace.cost_usd, 8),
+        "cache_hit": trace.cache_hit,
     }
 
 
@@ -184,6 +216,9 @@ def save_request(session: Session, trace: Trace) -> None:
             retrieved_ids=body["retrieved_ids"],
             scores=body["scores"],
             error_class=body["error_class"],
+            model=body["model"],
+            cost_usd=body["cost_usd"],
+            cache_hit=body["cache_hit"],
         )
     )
     session.commit()

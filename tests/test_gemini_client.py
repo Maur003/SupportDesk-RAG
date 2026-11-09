@@ -100,6 +100,22 @@ def test_generate_refuses_when_list_omits_a_configured_model() -> None:
     assert client.models.generate_calls == 0
 
 
+def test_generate_can_target_the_cheap_model() -> None:
+    client = _Client(["models/gemini-3.8-flash", "models/gemini-2.5-flash"])
+    llm = GeminiLLM(
+        api_key="unused",
+        generator_model="gemini-3.8-flash",
+        judge_model="gemini-2.5-flash",
+        client=client,
+    )
+    llm.generate([{"role": "user", "text": "hi"}], model="gemini-2.5-flash")
+    assert client.models.last_model == "gemini-2.5-flash"
+    assert client.models.list_calls == 1
+    with pytest.raises(ModelError, match="gemini-missing"):
+        llm.generate([{"role": "user", "text": "hi"}], model="gemini-missing")
+    assert client.models.generate_calls == 1
+
+
 def test_tool_call_round_trip_keeps_the_call_id() -> None:
     call = ToolCall("calculate", {"expression": "1+1"}, "call-1")
     assert call.arguments["expression"] == "1+1"

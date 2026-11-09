@@ -62,3 +62,22 @@ def test_crm_retry_settings() -> None:
         Settings(crm_timeout_seconds=0)
     with pytest.raises(ValidationError):
         Settings(crm_retry_attempts=0)
+
+
+def test_cost_and_cache_defaults() -> None:
+    settings = Settings()
+    assert settings.cheap_model == "gemini-2.5-flash"
+    assert settings.cheap_model == settings.judge_model
+    assert settings.cheap_model != settings.generator_model
+    assert settings.simple_query_max_chars == 80
+    assert settings.semantic_cache_distance == 0.05
+    assert settings.max_context_tokens == 2000
+    assert settings.min_context_score is None
+    with pytest.raises(ValidationError):
+        Settings(cheap_model="gemini-3.8-flash", generator_model="gemini-3.8-flash")
+    with pytest.raises(ValidationError):
+        Settings(simple_query_max_chars=-1)
+    with pytest.raises(ValidationError):
+        Settings(semantic_cache_distance=-0.01)
+    with pytest.raises(ValidationError):
+        Settings(max_context_tokens=0)

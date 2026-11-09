@@ -43,6 +43,7 @@ jobs:
       - run: make lint
       - run: make format-check
       - run: make test
+      - run: make cost
       - run: make migrate
       - run: make ingest
       - run: make eval

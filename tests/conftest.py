@@ -48,7 +48,10 @@ def migrated_engine(database_url: str):
 def db_session(migrated_engine) -> Session:
     with Session(migrated_engine) as session:
         session.execute(
-            text("TRUNCATE TABLE request_log, chunks, documents RESTART IDENTITY CASCADE")
+            text(
+                "TRUNCATE TABLE response_cache, request_log, chunks, documents "
+                "RESTART IDENTITY CASCADE"
+            )
         )
         session.commit()
         yield session

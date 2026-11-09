@@ -227,29 +227,35 @@ def timed_retrieve(
     k: int = RETRIEVAL_K,
     candidate_k: int = CANDIDATE_K,
     rerank_enabled: bool = True,
+    query_vector: list[float] | None = None,
     clock: object = time.perf_counter,
 ) -> Retrieval:
     """Same ids as `retrieve`, plus the stage times and the score of each id.
 
     Embedder failure uses keyword rank as the score and leaves rerank at 0.
-    The keyword fallback keeps `access_level = ANY(:allowed)`.
+    The keyword fallback keeps `access_level = ANY(:allowed)`. A caller that
+    already embedded the query passes `query_vector` and this function does
+    not embed again.
     """
 
-    started = clock()
-    try:
-        query_vector = embedder.embed_query(query)
-    except EmbedderError:
-        embed_seconds = clock() - started
+    if query_vector is None:
         started = clock()
-        pairs = keyword_search(session, query, allowed, k)
-        return Retrieval(
-            ids=[chunk_id for chunk_id, _rank in pairs],
-            scores=[rank for _chunk_id, rank in pairs],
-            embed_seconds=embed_seconds,
-            search_seconds=clock() - started,
-            rerank_seconds=0.0,
-        )
-    embed_seconds = clock() - started
+        try:
+            query_vector = embedder.embed_query(query)
+        except EmbedderError:
+            embed_seconds = clock() - started
+            started = clock()
+            pairs = keyword_search(session, query, allowed, k)
+            return Retrieval(
+                ids=[chunk_id for chunk_id, _rank in pairs],
+                scores=[rank for _chunk_id, rank in pairs],
+                embed_seconds=embed_seconds,
+                search_seconds=clock() - started,
+                rerank_seconds=0.0,
+            )
+        embed_seconds = clock() - started
+    else:
+        embed_seconds = 0.0
     pairs, search_seconds, rerank_seconds = _ranked(
         session,
         query,

@@ -2,7 +2,7 @@
 
 Synthetic customer-support agent for the fictional carrier **Northline Telecom**. Every document and gold question is synthetic. Nothing here is a real carrier's policy.
 
-This repository is at the end of Phase 8. Each logged request gets a trace id, one JSON line, and a `/metrics` count. `POST /ask` still runs a manual tool loop of at most five model calls, and an empty retrieval returns "I don't know" without calling the model. `POST /search` takes the role from a signed token and keeps the SQL access filter. `make eval` still prints the Phase 4 table; this phase does not change retrieval. `u01`–`u10` are unfilled, so they are outside the scored `n`. Refusal on the gold unanswerable set is not scored. A difference of one or two questions is reported as that count. Every comparison shows `n`, the corpus size, and the per-question wins, losses, and ties. `recall@20` is not reported. The cutoff is `recall@5`.
+This repository is at the end of Phase 9. `POST /ask` checks an exact cache, then a semantic cache. Both require the caller's access scope. A question of at most 80 normalized characters is priced on `gemini-2.5-flash`. `make cost` prints the token-cost table. Each logged request still gets a trace id, one JSON line, and a `/metrics` count. `POST /ask` still runs a manual tool loop of at most five model calls, and an empty retrieval returns "I don't know" without calling the model. `POST /search` takes the role from a signed token and keeps the SQL access filter. `make eval` still prints the Phase 4 table; this phase does not change retrieval. `u01`–`u10` are unfilled, so they are outside the scored `n`. Refusal on the gold unanswerable set is not scored. A difference of one or two questions is reported as that count. Every comparison shows `n`, the corpus size, and the per-question wins, losses, and ties. `recall@20` is not reported. The cutoff is `recall@5`.
 
 ## Gold set
 
@@ -30,6 +30,7 @@ docker compose up -d db
 make migrate
 make ingest
 make eval
+make cost
 make test
 make lint
 ```
@@ -318,6 +319,20 @@ Phase 7 does not change those retrieval numbers. If the role-scoped retrieval fo
 
 Phase 8 does not change those retrieval numbers. `GET /metrics` is Prometheus text from `prometheus-client`. That package is new because it is the client for `/metrics`, and it does not pull in an instrumentation framework. A request log is one JSON object on stdout and one `request_log` row. The fields are the trace id, route, role, status, embed/search/rerank/llm milliseconds, retrieved ids, scores, the stored token count of those chunks, and the model's prompt and candidate token counts when the turn reports them. Chunk text is not in the line or the row. `X-Trace-Id` is copied onto the response. `/health` and `/metrics` are not logged.
 
+Phase 9 does not change those retrieval numbers. No new package. Token prices are the 2026-10-30 constants in `config.py`: `gemini-3.8-flash` is $0.75 / $3.75 per 1M input and output tokens through 2026-12-31, then $1.50 / $7.50, and `gemini-2.5-flash` is $0.30 / $2.50. A question of at most 80 normalized characters uses `gemini-2.5-flash`. A longer question uses `gemini-3.8-flash`. The exact cache key hashes that normalized question, the model id, and the sorted access scope. The SQL lookup also filters on `access_scope`, so a finance row is not returned to a customer. After an exact miss, the nearest cached query embedding in that same scope and model is reused when cosine distance is at or under 0.05. That distance was not tuned on the gold set. Context compression dedupes chunk ids, drops scores below `MIN_CONTEXT_SCORE` when that setting is set, and stops at `MAX_CONTEXT_TOKENS`. The default 2000 still holds five 400-token chunks. The log keeps the retrieval ids. The prompt sees the compressed list. `make cost` does not call Gemini. It bills 100 scripted questions at a fixed 200 input tokens and 80 output tokens. Those token counts are assumptions, not a Gemini usage report. A cache hit adds no generation cost.
+
+```
+prices_read=2026-10-30 billed_as_of=2026-11-08 n=100 assumed_input_tokens=200 assumed_output_tokens=80 scope=public token_source=assumed gemini_calls=0
+generator=gemini-3.8-flash usd_per_1m_in=0.75 usd_per_1m_out=3.75
+cheap=gemini-2.5-flash usd_per_1m_in=0.30 usd_per_1m_out=2.50
+generator_after_2026-12-31 usd_per_1m_in=1.50 usd_per_1m_out=7.50
+simple_query_max_chars=80 semantic_cache_distance=0.05
+exact_hits=30 semantic_hits=5 cheap_billed=20 generator_billed=45
+cost_per_100_before=0.04500000 cost_per_100_after=0.02545000
+```
+
+The before column bills all 100 calls at the generator rate for 2026-11-08. The after column bills 45 generator calls and 20 cheap calls. The other 35 are cache hits. The API itself uses today's date, so a `gemini-3.8-flash` call after 2026-12-31 uses the higher rate. `make cost` stays pinned to 2026-11-08.
+
 The mock CRM is a second FastAPI process. `docker compose up` starts Postgres, that CRM, and the API. The API calls `GET /tickets/{id}` and `POST /tickets` with `X-API-Key`, a timeout, and retries only on 429 and 5xx. The seeded ticket is `TCK-1001`. `google-genai` is the generator client. A real generate calls `client.models.list()` once and refuses if `GENERATOR_MODEL` or `JUDGE_MODEL` is missing. Automatic function calling is disabled. Tests inject a fake model and do not call Gemini.
 
 `docker compose` targets are one line each. Every Python target is one `python -m ...` call, so the same Makefile works in PowerShell, Scoop's GNU Make, and CI.
@@ -331,7 +346,8 @@ Torch is installed from the CPU index in `requirements-torch.txt` before the loc
 - `data/corpus/{public,agent,finance}` — synthetic knowledge base. `synthetic: true` is required on every file. `tools/expand_corpus.py` rewrites the long near-duplicate pages.
 - Retrieval embeds the document title, the heading path, and the chunk text (`src/supportdesk/embed_text.py`). The stored chunk text stays the body. Queries get the BGE instruction prefix. Vectors are L2-normalized. Search is exact cosine distance with `access_level = ANY(...)`. Keyword search uses that same filter. Hybrid fuses the two top-20 lists. The cross-encoder then reranks that fused 20 and keeps 5. `POST /search` and the agent's search tool apply that filter to the role in the bearer token. There is no HNSW index.
 - `POST /ask` is the manual tool loop. `POST /confirmations/{id}` is the only ticket write. The mock CRM is `src/supportdesk/crm_server.py`, on port 8001.
-- `GET /metrics` and the `request_log` table record stage times, retrieved ids, and scores. The log line does not include chunk text.
+- `GET /metrics` and the `request_log` table record stage times, retrieved ids, scores, the routed model, the token cost, and `cache_hit`. The log line does not include chunk text.
+- `response_cache` stores an answer with its access scope, model id, and query embedding. Exact and semantic lookups both require that scope. `make cost` prices 100 scripted calls.
 - `src/supportdesk/ingest` — loaders, a 400-token chunker with 60 tokens of overlap, and hash-based re-ingest.
 - Chunk ids are `{doc_slug}#{ordinal}` and stay put while the file bytes and the chunker version stay put.
 
@@ -339,4 +355,4 @@ Model ids live in configuration (`GENERATOR_MODEL`, `JUDGE_MODEL`). The judge id
 
 ## Not in this phase
 
-Cost tracking. Exact response caching comes before any semantic cache or model routing, and only after Phases 1 through 8.
+A faithfulness judge, and the demo write-up. The judge id stays different from the generator id. Short questions are answered by `gemini-2.5-flash`, which is the same id as `JUDGE_MODEL`, and this phase does not score those answers. Gemini was not called, so faithfulness is not measured.

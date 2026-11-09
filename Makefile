@@ -1,4 +1,4 @@
-.PHONY: deps-torch deps deps-dev install lint format-check test migrate ingest manifest eval up down
+.PHONY: deps-torch deps deps-dev install lint format-check test migrate ingest manifest eval cost up down
 
 deps-torch:
 	python -m pip install -r requirements-torch.txt
@@ -32,6 +32,9 @@ manifest:
 
 eval:
 	python -m supportdesk.eval
+
+cost:
+	python -m supportdesk.cost
 
 up:
 	docker compose up -d --build
