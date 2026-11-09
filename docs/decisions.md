@@ -192,3 +192,15 @@ No new package. Retrieval was not re-run. The Phase 4 table is unchanged.
 Trade-off: the dollar table is a script with assumed token counts, not a Gemini bill. `make cost` pins the date at 2026-11-08 so the README number does not move when the flash rate steps up. The API uses the date of the request, so a later flash call uses the higher rate. A semantic hit trusts the embedding. Two different questions with the same vector and the same role reuse one answer. The fake embedder in tests returns one vector on purpose; the BGE embedder does not.
 
 Measured impact, from `tests/test_cost.py` and `python -m supportdesk.cost`, not from a live Gemini call: pytest is 92 passed. A second customer ask with different case and spacing is `cache_hit=exact`, the scripted model is called once, and that log line has `cost_usd` 0 and null token counts. The first line bills 200 input and 80 output tokens on `gemini-3.8-flash` at the 2026-11-08 rate. A stored finance answer for the same text is returned to the finance role with no model call, and the customer receives the public answer instead. `lookup_exact` misses when the scope column disagrees with the caller. `lookup_semantic` misses a finance vector for the customer scope, and misses an orthogonal vector at distance 1 against a threshold of 0.05. Two different customer questions that share a vector return the first answer after one generate, with `cache_hit=semantic`. A chunk of 10 tokens with `max_context_tokens=1` returns "I don't know", the model is not called, and the log still lists `public-doc#0`. `short 000` is routed to `gemini-2.5-flash` and the long question to `gemini-3.8-flash`, two generates. The cost script, n=100, reports exact_hits=30, semantic_hits=5, cheap_billed=20, generator_billed=45, cost_per_100_before=0.04500000, cost_per_100_after=0.02545000, token_source=assumed, gemini_calls=0.
+
+## Phase 10
+
+### The stranger path is a demo page, and the tables stay where they were measured
+
+`docs/demo.md` is the order of commands: database, migrate, ingest, `make eval`, `make cost`, then the API calls that work with an empty Gemini key. The README opening points at that page. The retrieval paste and the cost paste were not rewritten, because this phase did not run `make eval` again and did not call Gemini.
+
+`POST /ask` without a key is documented as 503, from the route that raises before retrieval. The customer and finance canary checks are documented as the behavior `tests/test_rbac.py` already asserts. No new package. No new metric.
+
+Trade-off: the README is still the phase log plus a short request path, and the click-by-click commands live in `docs/demo.md`. A chat page was not added. Swagger remains the UI. Faithfulness stays unmeasured until a key is present and the judge id differs from the model that wrote the answer.
+
+Measured impact: not a retrieval metric. The Phase 4 table and the Phase 9 cost table are unchanged.

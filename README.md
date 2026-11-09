@@ -2,7 +2,7 @@
 
 Synthetic customer-support agent for the fictional carrier **Northline Telecom**. Every document and gold question is synthetic. Nothing here is a real carrier's policy.
 
-This repository is at the end of Phase 9. `POST /ask` checks an exact cache, then a semantic cache. Both require the caller's access scope. A question of at most 80 normalized characters is priced on `gemini-2.5-flash`. `make cost` prints the token-cost table. Each logged request still gets a trace id, one JSON line, and a `/metrics` count. `POST /ask` still runs a manual tool loop of at most five model calls, and an empty retrieval returns "I don't know" without calling the model. `POST /search` takes the role from a signed token and keeps the SQL access filter. `make eval` still prints the Phase 4 table; this phase does not change retrieval. `u01`–`u10` are unfilled, so they are outside the scored `n`. Refusal on the gold unanswerable set is not scored. A difference of one or two questions is reported as that count. Every comparison shows `n`, the corpus size, and the per-question wins, losses, and ties. `recall@20` is not reported. The cutoff is `recall@5`.
+This repository is at the end of Phase 10. [`docs/demo.md`](docs/demo.md) is the walkthrough. The tables below are the stdout of `make eval` and `make cost` from the phases that produced them. `POST /ask` checks an exact cache, then a semantic cache. Both require the caller's access scope. A question of at most 80 normalized characters is priced on `gemini-2.5-flash`. Each logged request gets a trace id, one JSON line, and a `/metrics` count. The ask loop is at most five model calls, and an empty retrieval returns "I don't know" without calling the model. `POST /search` takes the role from a signed token and keeps the SQL access filter. `u01`–`u10` are unfilled, so they are outside the scored `n`. Refusal on the gold unanswerable set is not scored. A difference of one or two questions is reported as that count. Every comparison shows `n`, the corpus size, and the per-question wins, losses, and ties. `recall@20` is not reported. The cutoff is `recall@5`.
 
 ## Gold set
 
@@ -35,7 +35,7 @@ make test
 make lint
 ```
 
-`make up` builds the API image and starts it with Postgres. Swagger is at `http://localhost:8000/docs`. `GET /health` returns `{"status": "ok"}`.
+`make up` builds the image and starts Postgres, the mock CRM, and the API. Swagger is at `http://localhost:8000/docs`. `GET /health` returns `{"status": "ok"}`. The eval and cost commands stay on the host, against port 5433. Run `make migrate` and `make ingest` before the first search. The API process does not apply migrations. The command list for a live request is in [`docs/demo.md`](docs/demo.md).
 
 Postgres is published on host port **5433**. The container still listens on 5432. Port 5432 is left alone because a local Postgres often already owns it. CI sets `DATABASE_URL` itself and uses 5432 there.
 
@@ -341,6 +341,12 @@ Torch is installed from the CPU index in `requirements-torch.txt` before the loc
 
 `httpx==0.28.1` is in the runtime lock because the API calls the mock CRM. `httpx2` and `httpcore2` stay beside it: `huggingface_hub` 2.4 imports `httpx2` to download the tokenizer, and `httpx2` imports `httpcore2`. They are a different project from `httpx`. `google-genai==3.0.0` is the generator client, and the lock pins the packages pip installed with it. `prometheus-client==0.26.0` serves `/metrics`. The tokenizer revision is the Hub commit in `EMBEDDING_REVISION`, not the branch `main`.
 
+## Request path
+
+`POST /ask` reads the role from the bearer token and picks the model from the normalized question length. The exact cache key is that question, the model id, and the sorted access scope. The SQL lookup repeats the scope. A miss then checks the nearest cached query embedding in the same scope and model, at cosine distance 0.05 or under. A hit returns the stored answer.
+
+A cache miss retrieves with `access_level = ANY(...)`, fuses vector and keyword lists, and reranks. Compression dedupes and stops at 2000 tokens. An empty list is "I don't know" with no model call. Otherwise the tool loop runs. `create_ticket` returns `confirmation_required` and stops. `POST /confirmations/{id}` for the same role writes the ticket. The diagram and the PowerShell calls are in [`docs/demo.md`](docs/demo.md).
+
 ## Layout
 
 - `data/corpus/{public,agent,finance}` — synthetic knowledge base. `synthetic: true` is required on every file. `tools/expand_corpus.py` rewrites the long near-duplicate pages.
@@ -353,6 +359,15 @@ Torch is installed from the CPU index in `requirements-torch.txt` before the loc
 
 Model ids live in configuration (`GENERATOR_MODEL`, `JUDGE_MODEL`). The judge id must differ from the generator, and the judge temperature must be 0. A real Gemini generate checks both ids with `client.models.list()` before `generate_content`. The tests use a fake client.
 
-## Not in this phase
+## Known limits
 
-A faithfulness judge, and the demo write-up. The judge id stays different from the generator id. Short questions are answered by `gemini-2.5-flash`, which is the same id as `JUDGE_MODEL`, and this phase does not score those answers. Gemini was not called, so faithfulness is not measured.
+- `u01`–`u10` are unfilled. The other gold questions are LLM-drafted, and `tests/test_gold.py` checks that the labeled fact is in the labeled chunk.
+- Faithfulness, answer relevance, and refusal accuracy are unmeasured. No request in this repository has called Gemini, and `client.models.list()` has not been run against Google. An empty `GEMINI_API_KEY` makes `POST /ask` return 503. `POST /search` still runs.
+- Short questions are answered by `gemini-2.5-flash`, the same id as `JUDGE_MODEL`. A judge for those answers needs a different id from the one that wrote them.
+- `make cost` uses assumed token counts. The line in the table says `token_source=assumed` and `gemini_calls=0`. The semantic distance 0.05 was not tuned on the gold paraphrases.
+- Hybrid search tied the vector list on all 42 answerable questions. Rerank against hybrid moved 5 of those questions: 4 wins and 1 loss, `b02`, with 37 ties.
+- The mock CRM and the confirmation store are in memory. A question that retrieves no chunk is refused before the model can call `get_ticket_status`.
+- Search is an exact scan. There is no HNSW index and no chat page. Swagger and the CLI are the UI.
+- `.github/workflows/ci.yml` is the suite a stranger's push runs. It has not been executed from this workspace.
+
+A Gemini key would let `list()` run once and a faithfulness judge score answers whose model id differs from the judge. Filling `u01`–`u10`, measuring the 0.05 distance on the paraphrase questions with `n` and wins, losses, and ties, and revisiting the sequential scan once the corpus is larger than a few hundred chunks are the follow-ons. They are not in the measured tables.
