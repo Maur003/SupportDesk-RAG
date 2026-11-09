@@ -15,6 +15,7 @@ dependencies = [
     "PyJWT==2.10.1",
     "httpx==0.28.1",
     "google-genai==3.0.0",
+    "prometheus-client==0.26.0",
     "sentence-transformers==6.2.0",
 ]
 

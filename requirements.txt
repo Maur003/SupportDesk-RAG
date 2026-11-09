@@ -1,9 +1,10 @@
 # Runtime lock. Install requirements-torch.txt first so the CPU torch wheel is not replaced.
 # Direct: fastapi, uvicorn, pydantic-settings, SQLAlchemy, psycopg, pgvector, alembic, pypdf,
-# sentence-transformers, PyJWT, httpx, google-genai.
+# sentence-transformers, PyJWT, httpx, google-genai, prometheus-client.
 # PyJWT checks the HS256 signature and expiry on the role token.
 # httpx 0.28 calls the mock CRM. httpx2 and httpcore2 stay as well: huggingface_hub 2.4
 # imports httpx2 to download the tokenizer. google-genai is the generator client.
+# prometheus-client serves /metrics. It has no dependencies of its own.
 # The pins below include the direct packages and their transitive dependencies.
 alembic==1.20.1
 annotated-doc==0.0.5
@@ -43,6 +44,7 @@ numpy==2.5.4
 opentelemetry-api==1.45.2
 packaging==26.3
 pgvector==0.5.1
+prometheus-client==0.26.0
 psycopg==3.3.8
 psycopg-binary==3.3.8
 pyasn1==0.6.5

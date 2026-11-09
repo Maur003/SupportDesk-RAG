@@ -2,7 +2,7 @@
 
 Synthetic customer-support agent for the fictional carrier **Northline Telecom**. Every document and gold question is synthetic. Nothing here is a real carrier's policy.
 
-This repository is at the end of Phase 7. `POST /ask` still runs a manual tool loop of at most five model calls, and an empty retrieval now returns "I don't know" without calling the model. `POST /search` takes the role from a signed token and keeps the SQL access filter. `make eval` still prints the Phase 4 table; this phase does not change retrieval. `u01`–`u10` are unfilled, so they are outside the scored `n`. Refusal on the gold unanswerable set is not scored. A difference of one or two questions is reported as that count. Every comparison shows `n`, the corpus size, and the per-question wins, losses, and ties. `recall@20` is not reported. The cutoff is `recall@5`.
+This repository is at the end of Phase 8. Each logged request gets a trace id, one JSON line, and a `/metrics` count. `POST /ask` still runs a manual tool loop of at most five model calls, and an empty retrieval returns "I don't know" without calling the model. `POST /search` takes the role from a signed token and keeps the SQL access filter. `make eval` still prints the Phase 4 table; this phase does not change retrieval. `u01`–`u10` are unfilled, so they are outside the scored `n`. Refusal on the gold unanswerable set is not scored. A difference of one or two questions is reported as that count. Every comparison shows `n`, the corpus size, and the per-question wins, losses, and ties. `recall@20` is not reported. The cutoff is `recall@5`.
 
 ## Gold set
 
@@ -316,19 +316,22 @@ Phase 6 does not change those retrieval numbers. `POST /ask` uses the same beare
 
 Phase 7 does not change those retrieval numbers. If the role-scoped retrieval for the question is empty, `POST /ask` returns "I don't know" and does not call the model. The same refusal happens when a search tool comes back empty, without another model call. If the embedder raises, search uses keyword only, still with `access_level = ANY(:allowed)`, and does not call the reranker. If the model raises, or its circuit is open, the response is the top citations and "No answer was generated. The model is unavailable." The CRM and the generator retry only 429 and 5xx, with the same backoff and jitter. A timeout is not retried. Three dependency failures open a circuit for 30 seconds. A client error such as 400 does not open it. No new package.
 
+Phase 8 does not change those retrieval numbers. `GET /metrics` is Prometheus text from `prometheus-client`. That package is new because it is the client for `/metrics`, and it does not pull in an instrumentation framework. A request log is one JSON object on stdout and one `request_log` row. The fields are the trace id, route, role, status, embed/search/rerank/llm milliseconds, retrieved ids, scores, the stored token count of those chunks, and the model's prompt and candidate token counts when the turn reports them. Chunk text is not in the line or the row. `X-Trace-Id` is copied onto the response. `/health` and `/metrics` are not logged.
+
 The mock CRM is a second FastAPI process. `docker compose up` starts Postgres, that CRM, and the API. The API calls `GET /tickets/{id}` and `POST /tickets` with `X-API-Key`, a timeout, and retries only on 429 and 5xx. The seeded ticket is `TCK-1001`. `google-genai` is the generator client. A real generate calls `client.models.list()` once and refuses if `GENERATOR_MODEL` or `JUDGE_MODEL` is missing. Automatic function calling is disabled. Tests inject a fake model and do not call Gemini.
 
 `docker compose` targets are one line each. Every Python target is one `python -m ...` call, so the same Makefile works in PowerShell, Scoop's GNU Make, and CI.
 
 Torch is installed from the CPU index in `requirements-torch.txt` before the lockfiles. The default PyPI torch wheel is the CUDA build. `make deps` installs the runtime lock only. `make deps-dev` installs that lock plus pytest and ruff. The API image uses the runtime lock and does not install the dev packages.
 
-`httpx==0.28.1` is in the runtime lock because the API calls the mock CRM. `httpx2` and `httpcore2` stay beside it: `huggingface_hub` 2.4 imports `httpx2` to download the tokenizer, and `httpx2` imports `httpcore2`. They are a different project from `httpx`. `google-genai==3.0.0` is the generator client, and the lock pins the packages pip installed with it. The tokenizer revision is the Hub commit in `EMBEDDING_REVISION`, not the branch `main`.
+`httpx==0.28.1` is in the runtime lock because the API calls the mock CRM. `httpx2` and `httpcore2` stay beside it: `huggingface_hub` 2.4 imports `httpx2` to download the tokenizer, and `httpx2` imports `httpcore2`. They are a different project from `httpx`. `google-genai==3.0.0` is the generator client, and the lock pins the packages pip installed with it. `prometheus-client==0.26.0` serves `/metrics`. The tokenizer revision is the Hub commit in `EMBEDDING_REVISION`, not the branch `main`.
 
 ## Layout
 
 - `data/corpus/{public,agent,finance}` — synthetic knowledge base. `synthetic: true` is required on every file. `tools/expand_corpus.py` rewrites the long near-duplicate pages.
 - Retrieval embeds the document title, the heading path, and the chunk text (`src/supportdesk/embed_text.py`). The stored chunk text stays the body. Queries get the BGE instruction prefix. Vectors are L2-normalized. Search is exact cosine distance with `access_level = ANY(...)`. Keyword search uses that same filter. Hybrid fuses the two top-20 lists. The cross-encoder then reranks that fused 20 and keeps 5. `POST /search` and the agent's search tool apply that filter to the role in the bearer token. There is no HNSW index.
 - `POST /ask` is the manual tool loop. `POST /confirmations/{id}` is the only ticket write. The mock CRM is `src/supportdesk/crm_server.py`, on port 8001.
+- `GET /metrics` and the `request_log` table record stage times, retrieved ids, and scores. The log line does not include chunk text.
 - `src/supportdesk/ingest` — loaders, a 400-token chunker with 60 tokens of overlap, and hash-based re-ingest.
 - Chunk ids are `{doc_slug}#{ordinal}` and stay put while the file bytes and the chunker version stay put.
 
@@ -336,4 +339,4 @@ Model ids live in configuration (`GENERATOR_MODEL`, `JUDGE_MODEL`). The judge id
 
 ## Not in this phase
 
-Observability and cost tracking. Exact response caching comes before any semantic cache or model routing, and only after Phases 1 through 8.
+Cost tracking. Exact response caching comes before any semantic cache or model routing, and only after Phases 1 through 8.

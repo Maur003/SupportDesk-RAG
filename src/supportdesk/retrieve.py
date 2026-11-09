@@ -4,6 +4,9 @@ The access filter is SQL, not a Python post-filter. Keyword search uses the
 same `access_level = ANY(:allowed)` predicate as the vector query.
 """
 
+import time
+from dataclasses import dataclass
+
 from sqlalchemy import any_, bindparam, func, literal_column, select
 from sqlalchemy.dialects.postgresql import ARRAY
 from sqlalchemy.orm import Session
@@ -180,6 +183,15 @@ def rerank_order(chunk_ids: list[str], logits: list[float], k: int) -> list[str]
     return [chunk_id for chunk_id, _logit in ranked[:k]]
 
 
+@dataclass(frozen=True)
+class Retrieval:
+    ids: list[str]
+    scores: list[float]
+    embed_seconds: float
+    search_seconds: float
+    rerank_seconds: float
+
+
 def retrieve(
     session: Session,
     query: str,
@@ -191,17 +203,54 @@ def retrieve(
     candidate_k: int = CANDIDATE_K,
     rerank_enabled: bool = True,
 ) -> list[str]:
-    """Search, or keyword-only when the embedder cannot encode the query.
+    """Search, or keyword-only when the embedder cannot encode the query."""
 
-    The keyword fallback keeps `access_level = ANY(:allowed)` and does not call
-    the reranker. Its cutoff is `k`, the same window as a normal search.
+    return timed_retrieve(
+        session,
+        query,
+        embedder,
+        allowed,
+        reranker,
+        k=k,
+        candidate_k=candidate_k,
+        rerank_enabled=rerank_enabled,
+    ).ids
+
+
+def timed_retrieve(
+    session: Session,
+    query: str,
+    embedder: object,
+    allowed: tuple[str, ...],
+    reranker: object,
+    *,
+    k: int = RETRIEVAL_K,
+    candidate_k: int = CANDIDATE_K,
+    rerank_enabled: bool = True,
+    clock: object = time.perf_counter,
+) -> Retrieval:
+    """Same ids as `retrieve`, plus the stage times and the score of each id.
+
+    Embedder failure uses keyword rank as the score and leaves rerank at 0.
+    The keyword fallback keeps `access_level = ANY(:allowed)`.
     """
 
+    started = clock()
     try:
         query_vector = embedder.embed_query(query)
     except EmbedderError:
-        return [chunk_id for chunk_id, _rank in keyword_search(session, query, allowed, k)]
-    return search(
+        embed_seconds = clock() - started
+        started = clock()
+        pairs = keyword_search(session, query, allowed, k)
+        return Retrieval(
+            ids=[chunk_id for chunk_id, _rank in pairs],
+            scores=[rank for _chunk_id, rank in pairs],
+            embed_seconds=embed_seconds,
+            search_seconds=clock() - started,
+            rerank_seconds=0.0,
+        )
+    embed_seconds = clock() - started
+    pairs, search_seconds, rerank_seconds = _ranked(
         session,
         query,
         query_vector,
@@ -210,6 +259,14 @@ def retrieve(
         k=k,
         candidate_k=candidate_k,
         rerank_enabled=rerank_enabled,
+        clock=clock,
+    )
+    return Retrieval(
+        ids=[chunk_id for chunk_id, _score in pairs],
+        scores=[score for _chunk_id, score in pairs],
+        embed_seconds=embed_seconds,
+        search_seconds=search_seconds,
+        rerank_seconds=rerank_seconds,
     )
 
 
@@ -230,13 +287,44 @@ def search(
     reranker does not see chunks outside that list.
     """
 
+    pairs, _search_seconds, _rerank_seconds = _ranked(
+        session,
+        query,
+        query_vector,
+        allowed,
+        reranker,
+        k=k,
+        candidate_k=candidate_k,
+        rerank_enabled=rerank_enabled,
+        clock=time.perf_counter,
+    )
+    return [chunk_id for chunk_id, _score in pairs]
+
+
+def _ranked(
+    session: Session,
+    query: str,
+    query_vector: list[float],
+    allowed: tuple[str, ...],
+    reranker: object,
+    *,
+    k: int,
+    candidate_k: int,
+    rerank_enabled: bool,
+    clock: object,
+) -> tuple[list[tuple[str, float]], float, float]:
     if k < 1:
         raise ValueError("k must be positive")
-    _vector_ids, _keyword_ids, fused = candidate_lists(
+    started = clock()
+    vector_ids, keyword_ids, fused = candidate_lists(
         session, query, query_vector, allowed, candidate_k
     )
+    search_seconds = clock() - started
+    fused_scores = dict(fuse_rankings([vector_ids, keyword_ids]))
     if not rerank_enabled:
-        return fused[:k]
+        kept = fused[:k]
+        return [(chunk_id, fused_scores[chunk_id]) for chunk_id in kept], search_seconds, 0.0
+    started = clock()
     rows = session.scalars(select(Chunk).where(Chunk.id.in_(fused))).all()
     by_id = {row.id: row for row in rows}
     passages = [
@@ -244,4 +332,7 @@ def search(
         for chunk_id in fused
     ]
     logits = reranker.score(query, passages)
-    return rerank_order(fused, logits, k)
+    order = rerank_order(fused, logits, k)
+    by_logit = dict(zip(fused, logits, strict=True))
+    pairs = [(chunk_id, by_logit[chunk_id]) for chunk_id in order]
+    return pairs, search_seconds, clock() - started

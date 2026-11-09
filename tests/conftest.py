@@ -47,7 +47,9 @@ def migrated_engine(database_url: str):
 @pytest.fixture
 def db_session(migrated_engine) -> Session:
     with Session(migrated_engine) as session:
-        session.execute(text("TRUNCATE TABLE chunks, documents RESTART IDENTITY CASCADE"))
+        session.execute(
+            text("TRUNCATE TABLE request_log, chunks, documents RESTART IDENTITY CASCADE")
+        )
         session.commit()
         yield session
         session.rollback()

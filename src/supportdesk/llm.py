@@ -14,6 +14,7 @@ from collections.abc import Callable
 from dataclasses import dataclass
 
 from supportdesk.breaker import RETRYABLE_STATUS, CircuitBreaker, retry_delay
+from supportdesk.observe import add_llm
 
 TOOL_PARAMETERS = {
     "search_knowledge_base": {
@@ -73,6 +74,8 @@ class ToolCall:
 class ModelTurn:
     text: str
     tool_call: ToolCall | None = None
+    input_tokens: int | None = None
+    output_tokens: int | None = None
 
 
 class GeminiLLM:
@@ -142,6 +145,13 @@ class GuardedLLM:
         self._rng = rng
 
     def generate(self, messages: list[dict]) -> ModelTurn:
+        started = time.perf_counter()
+        try:
+            return self._generate(messages)
+        finally:
+            add_llm(time.perf_counter() - started, None, None)
+
+    def _generate(self, messages: list[dict]) -> ModelTurn:
         if not self._breaker.allow():
             raise LLMUnavailable("circuit open")
         last: Exception | None = None
@@ -168,6 +178,7 @@ class GuardedLLM:
                 if not isinstance(turn, ModelTurn):
                     raise TypeError("llm.generate must return a ModelTurn")
                 self._breaker.record_success()
+                add_llm(0.0, turn.input_tokens, turn.output_tokens)
                 return turn
         self._breaker.record_failure()
         raise LLMUnavailable("unavailable") from last
@@ -246,8 +257,11 @@ def _contents(messages: list[dict]) -> list:
 def _turn(response: object) -> ModelTurn:
     calls = getattr(response, "function_calls", None) or []
     text = getattr(response, "text", None) or ""
+    usage = getattr(response, "usage_metadata", None)
+    input_tokens = _usage_count(usage, "prompt_token_count")
+    output_tokens = _usage_count(usage, "candidates_token_count")
     if not calls:
-        return ModelTurn(text=text)
+        return ModelTurn(text=text, input_tokens=input_tokens, output_tokens=output_tokens)
     call = calls[0]
     return ModelTurn(
         text=text,
@@ -256,7 +270,18 @@ def _turn(response: object) -> ModelTurn:
             arguments=dict(call.args or {}),
             call_id=call.id,
         ),
+        input_tokens=input_tokens,
+        output_tokens=output_tokens,
     )
+
+
+def _usage_count(usage: object, name: str) -> int | None:
+    if usage is None:
+        return None
+    value = getattr(usage, name, None)
+    if isinstance(value, int):
+        return value
+    return None
 
 
 def _model_names(listed: object) -> list[str]:

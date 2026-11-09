@@ -1,4 +1,8 @@
+import json
+import uuid
+
 from fastapi import Depends, FastAPI, HTTPException
+from fastapi.responses import Response
 from fastapi.security import HTTPAuthorizationCredentials, HTTPBearer
 from pydantic import BaseModel, ConfigDict, Field
 from sqlalchemy import select
@@ -15,8 +19,22 @@ from supportdesk.db import make_engine, make_session_factory
 from supportdesk.embedder import BgeEmbedder
 from supportdesk.llm import GeminiLLM, GuardedLLM
 from supportdesk.models import Chunk
+from supportdesk.observe import (
+    METRICS_MEDIA_TYPE,
+    AppMetrics,
+    Trace,
+    add_retrieval,
+    configure_logging,
+    current_trace,
+    emit,
+    note_error,
+    note_role,
+    note_route,
+    note_status,
+    save_request,
+)
 from supportdesk.reranker import MiniLMReranker
-from supportdesk.retrieve import retrieve
+from supportdesk.retrieve import timed_retrieve
 
 _bearer = HTTPBearer(auto_error=False)
 
@@ -88,18 +106,51 @@ def create_app(
         settings.circuit_failure_threshold,
         settings.circuit_reset_seconds,
     )
+    app.state.metrics = AppMetrics()
+    configure_logging()
+
+    @app.middleware("http")
+    async def trace_request(request, call_next):
+        if request.url.path in {"/health", "/metrics"}:
+            return await call_next(request)
+        header = request.headers.get("x-trace-id", "")
+        trace = Trace(trace_id=header.strip()[:128] or uuid.uuid4().hex)
+        token = current_trace.set(trace)
+        try:
+            response = await call_next(request)
+        except Exception as exc:
+            trace.error_class = trace.error_class or type(exc).__name__
+            trace.status = trace.status or "error"
+            _finish(app, trace)
+            current_trace.reset(token)
+            raise
+        if not trace.status:
+            trace.status = str(response.status_code)
+        if response.status_code >= 400 and not trace.error_class:
+            trace.error_class = f"http_{response.status_code}"
+        _finish(app, trace)
+        response.headers["x-trace-id"] = trace.trace_id
+        current_trace.reset(token)
+        return response
 
     @app.get("/health")
     def health() -> dict[str, str]:
         return {"status": "ok"}
+
+    @app.get("/metrics")
+    def metrics() -> Response:
+        return Response(content=app.state.metrics.render(), media_type=METRICS_MEDIA_TYPE)
 
     @app.post("/search")
     def search_route(
         body: SearchRequest,
         credentials: HTTPAuthorizationCredentials | None = Depends(_bearer),
     ) -> SearchResponse:
+        note_route("search")
         role = _role_from_header(credentials)
+        note_role(role)
         hits = _search_hits(app, role, body.query)
+        note_status("ok")
         return SearchResponse(role=role, hits=[Hit(**hit) for hit in hits])
 
     @app.post("/ask")
@@ -107,10 +158,13 @@ def create_app(
         body: AskRequest,
         credentials: HTTPAuthorizationCredentials | None = Depends(_bearer),
     ) -> AskResponse:
+        note_route("ask")
         role = _role_from_header(credentials)
+        note_role(role)
         llm = _llm(app)
         citations = _search_hits(app, role, body.query) if app.state.prefetch_retrieval else []
         if app.state.prefetch_retrieval and not citations:
+            note_status("refused")
             return AskResponse(role=role, status="refused", steps=0, answer=REFUSAL)
         result = run_agent(
             body.query,
@@ -121,6 +175,9 @@ def create_app(
             confirmations=_confirmations(app),
             citations=citations,
         )
+        note_status(result.status)
+        if result.status == "unavailable":
+            note_error("LLMUnavailable")
         return AskResponse(
             role=role,
             status=result.status,
@@ -137,7 +194,9 @@ def create_app(
         confirmation_id: str,
         credentials: HTTPAuthorizationCredentials | None = Depends(_bearer),
     ) -> dict[str, str]:
+        note_route("confirm")
         role = _role_from_header(credentials)
+        note_role(role)
         store = _confirmations(app)
         try:
             item = store.get(confirmation_id, role)
@@ -150,12 +209,14 @@ def create_app(
         try:
             ticket = _crm(app).create_ticket(item["summary"], item["account_id"])
         except CrmError as exc:
+            note_error("CrmError")
             if str(exc) == "circuit open":
                 raise HTTPException(status_code=503, detail="crm unavailable") from exc
             if str(exc) == "timeout":
                 raise HTTPException(status_code=504, detail="crm timeout") from exc
             raise HTTPException(status_code=502, detail="crm create failed") from exc
         store.discard(confirmation_id)
+        note_status("created")
         return ticket
 
     return app
@@ -251,7 +312,7 @@ def _search_hits(app: FastAPI, role: str, query: str) -> list[dict[str, str]]:
     settings = get_settings()
     factory = _session_factory(app)
     with factory() as session:
-        ids = retrieve(
+        found = timed_retrieve(
             session,
             query,
             _embedder(app),
@@ -259,16 +320,40 @@ def _search_hits(app: FastAPI, role: str, query: str) -> list[dict[str, str]]:
             _reranker(app),
             rerank_enabled=settings.rerank_enabled,
         )
-        return [hit.model_dump() for hit in _hits(session, ids)]
+        hits, retrieved_tokens = _hits(session, found.ids)
+        add_retrieval(
+            ids=found.ids,
+            scores=found.scores,
+            embed_seconds=found.embed_seconds,
+            search_seconds=found.search_seconds,
+            rerank_seconds=found.rerank_seconds,
+            retrieved_tokens=retrieved_tokens,
+        )
+        return [hit.model_dump() for hit in hits]
 
 
-def _hits(session: Session, ids: list[str]) -> list[Hit]:
+def _hits(session: Session, ids: list[str]) -> tuple[list[Hit], int]:
     if not ids:
-        return []
+        return [], 0
     rows = session.scalars(select(Chunk).where(Chunk.id.in_(ids))).all()
     order = {chunk_id: index for index, chunk_id in enumerate(ids)}
     rows = sorted(rows, key=lambda row: order[row.id])
-    return [Hit(id=row.id, access_level=row.access_level, text=row.text) for row in rows]
+    hits = [Hit(id=row.id, access_level=row.access_level, text=row.text) for row in rows]
+    return hits, sum(row.token_count for row in rows)
+
+
+def _finish(app: FastAPI, trace: Trace) -> None:
+    emit(app.state.metrics, trace)
+    factory = app.state.session_factory
+    if factory is None or not trace.route:
+        return
+    try:
+        with factory() as session:
+            save_request(session, trace)
+    except Exception:
+        from supportdesk.observe import logger
+
+        logger.warning(json.dumps({"trace_id": trace.trace_id, "error_class": "request_log_write"}))
 
 
 app = create_app()

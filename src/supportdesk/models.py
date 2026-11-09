@@ -1,7 +1,18 @@
 from datetime import datetime
 
 from pgvector.sqlalchemy import VECTOR
-from sqlalchemy import Computed, DateTime, ForeignKey, Integer, String, Text, UniqueConstraint, func
+from sqlalchemy import (
+    JSON,
+    Computed,
+    DateTime,
+    Float,
+    ForeignKey,
+    Integer,
+    String,
+    Text,
+    UniqueConstraint,
+    func,
+)
 from sqlalchemy.dialects.postgresql import ENUM, TSVECTOR
 from sqlalchemy.orm import DeclarativeBase, Mapped, mapped_column, relationship
 
@@ -73,3 +84,26 @@ class Chunk(Base):
     )
 
     document: Mapped[Document] = relationship(back_populates="chunks")
+
+
+class RequestLog(Base):
+    __tablename__ = "request_log"
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
+    trace_id: Mapped[str] = mapped_column(String(128), unique=True, nullable=False)
+    created_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), server_default=func.now(), nullable=False
+    )
+    route: Mapped[str] = mapped_column(String, nullable=False)
+    role: Mapped[str] = mapped_column(String, nullable=False)
+    status: Mapped[str] = mapped_column(String, nullable=False)
+    embed_ms: Mapped[float] = mapped_column(Float, nullable=False)
+    search_ms: Mapped[float] = mapped_column(Float, nullable=False)
+    rerank_ms: Mapped[float] = mapped_column(Float, nullable=False)
+    llm_ms: Mapped[float] = mapped_column(Float, nullable=False)
+    retrieved_tokens: Mapped[int | None] = mapped_column(Integer, nullable=True)
+    llm_input_tokens: Mapped[int | None] = mapped_column(Integer, nullable=True)
+    llm_output_tokens: Mapped[int | None] = mapped_column(Integer, nullable=True)
+    retrieved_ids: Mapped[list] = mapped_column(JSON, nullable=False)
+    scores: Mapped[list] = mapped_column(JSON, nullable=False)
+    error_class: Mapped[str | None] = mapped_column(String, nullable=True)
