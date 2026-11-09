@@ -24,12 +24,14 @@ class AgentResult:
     summary: str | None = None
     account_id: str | None = None
     citations: list[dict[str, str]] = field(default_factory=list)
+    tools: tuple[str, ...] = ()
 
 
 def run_agent(
     query: str,
     role: str,
     *,
+    account_id: str,
     llm: object,
     search_fn,
     crm: CrmClient,
@@ -37,23 +39,30 @@ def run_agent(
     citations: list[dict[str, str]] | None = None,
 ) -> AgentResult:
     held = list(citations or [])
+    tools: list[str] = []
     messages: list[dict] = [{"role": "user", "text": query}]
     for step in range(1, MAX_STEPS + 1):
         try:
             turn = llm.generate(messages)
         except LLMUnavailable:
-            return AgentResult(status="unavailable", steps=step, answer=UNAVAILABLE, citations=held)
+            return AgentResult(
+                status="unavailable",
+                steps=step,
+                answer=UNAVAILABLE,
+                citations=held,
+                tools=tuple(tools),
+            )
         if not isinstance(turn, ModelTurn):
             raise TypeError("llm.generate must return a ModelTurn")
         if turn.tool_call is None:
-            return AgentResult(status="answered", steps=step, answer=turn.text)
+            return AgentResult(status="answered", steps=step, answer=turn.text, tools=tuple(tools))
         call = turn.tool_call
+        tools.append(call.name)
         if call.name == "create_ticket":
             summary = _text_arg(call.arguments, "summary")
-            account_id = _text_arg(call.arguments, "account_id")
             if summary and account_id:
                 confirmation_id = confirmations.create(
-                    role=role, summary=summary, account_id=account_id
+                    role=role, sub=account_id, summary=summary, account_id=account_id
                 )
                 return AgentResult(
                     status="confirmation_required",
@@ -61,12 +70,19 @@ def run_agent(
                     confirmation_id=confirmation_id,
                     summary=summary,
                     account_id=account_id,
+                    tools=tuple(tools),
                 )
-            result = {"error": "summary and account_id are required"}
+            result = {"error": "summary is required"}
         else:
-            result = _execute(call.name, call.arguments, search_fn=search_fn, crm=crm)
+            result = _execute(
+                call.name,
+                call.arguments,
+                search_fn=search_fn,
+                crm=crm,
+                account_id=account_id,
+            )
         if result.get("hits") == []:
-            return AgentResult(status="refused", steps=step, answer=REFUSAL)
+            return AgentResult(status="refused", steps=step, answer=REFUSAL, tools=tuple(tools))
         messages.append({"role": "model", "text": turn.text, "tool_call": call})
         messages.append(
             {
@@ -76,10 +92,10 @@ def run_agent(
                 "content": result,
             }
         )
-    return AgentResult(status="step_limit", steps=MAX_STEPS)
+    return AgentResult(status="step_limit", steps=MAX_STEPS, tools=tuple(tools))
 
 
-def _execute(name: str, arguments: dict, *, search_fn, crm: CrmClient) -> dict:
+def _execute(name: str, arguments: dict, *, search_fn, crm: CrmClient, account_id: str) -> dict:
     if name not in TOOL_DESCRIPTIONS:
         return {"error": "unknown tool"}
     if name == "search_knowledge_base":
@@ -92,9 +108,12 @@ def _execute(name: str, arguments: dict, *, search_fn, crm: CrmClient) -> dict:
         if not ticket_id:
             return {"error": "ticket_id is required"}
         try:
-            return {"ticket": crm.get_ticket(ticket_id)}
+            ticket = crm.get_ticket(ticket_id)
         except CrmError as exc:
             return {"error": _crm_error(exc)}
+        if ticket.get("account_id") != account_id:
+            return {"error": "ticket not found"}
+        return {"ticket": ticket}
     if name == "calculate":
         expression = arguments.get("expression")
         if not isinstance(expression, str) or not expression.strip():

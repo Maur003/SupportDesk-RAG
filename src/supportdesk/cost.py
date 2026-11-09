@@ -22,6 +22,8 @@ N_SEMANTIC = 5
 N_LONG_REPEATS = 20
 N_SHORT = 20
 N_SHORT_REPEATS = 10
+SIMULATED_CORPUS = "cost-sim"
+SIMULATED_SEMANTIC_DISTANCE = 0.05
 
 
 @dataclass(frozen=True)
@@ -63,7 +65,7 @@ def workload() -> list[tuple[str, list[float]]]:
 def simulate() -> CostReport:
     settings = get_settings()
     scope = access_scope("customer")
-    cache = ScopeCache(settings.semantic_cache_distance)
+    cache = ScopeCache(SIMULATED_SEMANTIC_DISTANCE)
     exact_hits = 0
     semantic_hits = 0
     cheap_billed = 0
@@ -76,14 +78,14 @@ def simulate() -> CostReport:
             cheap_model=settings.cheap_model,
             generator_model=settings.generator_model,
         )
-        kind = cache.lookup(query, scope, model, vector)
+        kind = cache.lookup(query, scope, model, vector, SIMULATED_CORPUS)
         if kind == "exact":
             exact_hits += 1
             continue
         if kind == "semantic":
             semantic_hits += 1
             continue
-        cache.store(query, scope, model, vector)
+        cache.store(query, scope, model, vector, SIMULATED_CORPUS)
         after += cost_usd(model, ASSUMED_INPUT_TOKENS, ASSUMED_OUTPUT_TOKENS, BILLED_AS_OF)
         if model == settings.cheap_model:
             cheap_billed += 1
@@ -120,7 +122,7 @@ def simulate() -> CostReport:
         generator_in_after=later_in,
         generator_out_after=later_out,
         simple_query_max_chars=settings.simple_query_max_chars,
-        semantic_cache_distance=settings.semantic_cache_distance,
+        semantic_cache_distance=SIMULATED_SEMANTIC_DISTANCE,
     )
 
 
@@ -146,8 +148,9 @@ def render(report: CostReport | None = None) -> str:
             f"usd_per_1m_in={report.generator_in_after} usd_per_1m_out={report.generator_out_after}"
         ),
         (
+            "simulation=true api_semantic_cache=disabled "
             f"simple_query_max_chars={report.simple_query_max_chars} "
-            f"semantic_cache_distance={report.semantic_cache_distance}"
+            f"simulated_semantic_cache_distance={report.semantic_cache_distance}"
         ),
         (
             f"exact_hits={report.exact_hits} semantic_hits={report.semantic_hits} "

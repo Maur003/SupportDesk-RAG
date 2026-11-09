@@ -42,7 +42,7 @@ def test_search_uses_the_token_role_and_drops_forbidden_canaries(db_session) -> 
 
     smuggled = client.post(
         "/search",
-        headers=_bearer(issue_token("customer", secret)),
+        headers=_bearer(issue_token("customer", secret, "ACCT-4401")),
         json={"query": FINANCE_CANARY, "role": "finance"},
     )
     assert smuggled.status_code == 422
@@ -81,7 +81,7 @@ def _bearer(token: str) -> dict[str, str]:
 def _search(client: TestClient, role: str, query: str) -> dict:
     response = client.post(
         "/search",
-        headers=_bearer(issue_token(role, get_settings().jwt_secret)),
+        headers=_bearer(issue_token(role, get_settings().jwt_secret, "ACCT-4401")),
         json={"query": query},
     )
     assert response.status_code == 200

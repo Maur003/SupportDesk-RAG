@@ -204,3 +204,15 @@ Measured impact, from `tests/test_cost.py` and `python -m supportdesk.cost`, not
 Trade-off: the README is still the phase log plus a short request path, and the click-by-click commands live in `docs/demo.md`. A chat page was not added. Swagger remains the UI. Faithfulness stays unmeasured until a key is present and the judge id differs from the model that wrote the answer.
 
 Measured impact: not a retrieval metric. The Phase 4 table and the Phase 9 cost table are unchanged.
+
+## After Phase 10
+
+### OR keyword search, a stricter cache, and the token subject
+
+Keyword search on the ask path stems the question with `to_tsvector('english')` and joins the lexemes with `|` inside `to_tsquery`. `make eval` still scores `websearch_to_tsquery` beside it. On answerable recall@5, n=42, hybrid OR versus AND is 0 wins, 8 losses, 34 ties, recall 0.4524 versus 0.6310. Rerank OR versus AND is 1 win (`b04`), 1 loss (`b22`), 40 ties, and both recalls are 0.7024. That one-question difference is not an improvement. The hybrid guard moved from 0.50 to 0.40 so it sits under the measured OR hybrid recall. Leak and absent-hit stay 0.
+
+The exact key now includes a hash of every chunk content hash. A re-ingest that changes a chunk hash misses the old row. Rows older than 86400 seconds miss. An answer is stored only when `search_knowledge_base` was the only tool. Semantic lookup is off unless `SEMANTIC_CACHE_DISTANCE` is set. The Fiber 500 and Fiber 1000 price questions are cosine distance 0.154993 apart, and the opening paragraphs are 0.081194 apart. Both are above 0.05. `make cost` remains a simulation and still applies 0.05 inside that script.
+
+The token carries `sub`. Ticket creates use that subject, not the model's `account_id`. `get_ticket_status` returns another account's ticket as not found. A confirmation matches `sub` and expires after 300 seconds. `ENV=production` refuses the default JWT secret and the default CRM key.
+
+No new package. The corpus was not regenerated.

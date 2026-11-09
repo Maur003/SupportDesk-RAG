@@ -11,19 +11,32 @@ from supportdesk.token import main
 SECRET = "test-secret"
 
 
-def test_round_trip_reads_the_role_claim() -> None:
-    token = issue_token("finance", SECRET)
+def test_round_trip_reads_the_role_and_subject() -> None:
+    from supportdesk.auth import read_principal
+
+    token = issue_token("finance", SECRET, "ACCT-4401")
     assert read_role(token, SECRET) == "finance"
+    assert read_principal(token, SECRET).sub == "ACCT-4401"
+
+
+def test_a_token_without_sub_is_rejected() -> None:
+    from supportdesk.auth import read_principal
+
+    forged = jwt.encode({"role": "customer", "exp": 9_999_999_999}, SECRET, algorithm="HS256")
+    with pytest.raises(TokenError, match="subject"):
+        read_principal(forged, SECRET)
 
 
 def test_wrong_secret_expired_token_and_unknown_role_are_rejected() -> None:
-    token = issue_token("customer", SECRET)
+    token = issue_token("customer", SECRET, "ACCT-4401")
     with pytest.raises(TokenError):
         read_role(token, "other-secret")
-    expired = issue_token("customer", SECRET, ttl_seconds=-10)
+    expired = issue_token("customer", SECRET, "ACCT-4401", ttl_seconds=-10)
     with pytest.raises(TokenError):
         read_role(expired, SECRET)
-    forged = jwt.encode({"role": "root", "exp": 9_999_999_999}, SECRET, algorithm="HS256")
+    forged = jwt.encode(
+        {"role": "root", "sub": "ACCT-4401", "exp": 9_999_999_999}, SECRET, algorithm="HS256"
+    )
     with pytest.raises(TokenError):
         read_role(forged, SECRET)
 
@@ -35,7 +48,7 @@ def test_alg_none_token_is_rejected() -> None:
 
 
 def test_token_cli_prints_a_usable_token(capsys: pytest.CaptureFixture[str]) -> None:
-    main(["agent"])
+    main(["agent", "ACCT-4401"])
     token = capsys.readouterr().out.strip()
     assert read_role(token, get_settings().jwt_secret) == "agent"
 

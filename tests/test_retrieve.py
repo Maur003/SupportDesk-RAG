@@ -273,6 +273,11 @@ def test_keyword_and_hybrid_keep_the_access_filter(db_session) -> None:
     allowed = ("public",)
     keyword_hits = keyword_search(db_session, "visibleword", allowed, k=5)
     assert [chunk_id for chunk_id, _rank in keyword_hits] == ["public-doc#1"]
+    or_hits = keyword_search(db_session, "visibleword missingterm", allowed, k=5)
+    assert [chunk_id for chunk_id, _rank in or_hits] == ["public-doc#1"]
+    and_hits = keyword_search(db_session, "visibleword missingterm", allowed, k=5, mode="and")
+    assert and_hits == []
+    assert keyword_search(db_session, "the", allowed, k=5) == []
 
     hybrid_hits = hybrid_search(db_session, "visibleword", _vector(1.0), allowed, k=5)
     hybrid_ids = [chunk_id for chunk_id, _score in hybrid_hits]
@@ -283,4 +288,7 @@ def test_keyword_and_hybrid_keep_the_access_filter(db_session) -> None:
     assert "ANY" in sql
     assert "@@" in sql
     assert "ts_rank_cd" in sql
-    assert "websearch_to_tsquery" in sql
+    assert "to_tsquery" in sql
+    assert "websearch_to_tsquery" not in sql
+    and_sql = str(keyword_statement(5, "and").compile(compile_kwargs={"literal_binds": False}))
+    assert "websearch_to_tsquery" in and_sql

@@ -70,7 +70,9 @@ def test_cost_and_cache_defaults() -> None:
     assert settings.cheap_model == settings.judge_model
     assert settings.cheap_model != settings.generator_model
     assert settings.simple_query_max_chars == 80
-    assert settings.semantic_cache_distance == 0.05
+    assert settings.semantic_cache_distance is None
+    assert settings.cache_ttl_seconds == 86400
+    assert settings.env == "development"
     assert settings.max_context_tokens == 2000
     assert settings.min_context_score is None
     with pytest.raises(ValidationError):
@@ -81,3 +83,8 @@ def test_cost_and_cache_defaults() -> None:
         Settings(semantic_cache_distance=-0.01)
     with pytest.raises(ValidationError):
         Settings(max_context_tokens=0)
+    with pytest.raises(ValidationError, match="jwt_secret"):
+        Settings(env="production")
+    with pytest.raises(ValidationError, match="crm_api_key"):
+        Settings(env="production", jwt_secret="not-the-dev-secret")
+    Settings(env="production", jwt_secret="not-the-dev-secret", crm_api_key="not-the-dev-key")

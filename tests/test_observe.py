@@ -164,7 +164,7 @@ def _client(db_session, llm=None) -> TestClient:
 
 
 def _bearer(role: str) -> dict[str, str]:
-    return {"Authorization": f"Bearer {issue_token(role, get_settings().jwt_secret)}"}
+    return {"Authorization": f"Bearer {issue_token(role, get_settings().jwt_secret, 'ACCT-4401')}"}
 
 
 def _seed(db_session) -> None:

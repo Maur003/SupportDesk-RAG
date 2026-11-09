@@ -151,6 +151,7 @@ def test_empty_tool_search_stops_without_another_model_call() -> None:
     result = run_agent(
         "nothing",
         "customer",
+        account_id="ACCT-4401",
         llm=llm,
         search_fn=lambda _query: [],
         crm=CrmClient("http://127.0.0.1:9", "test-key"),
@@ -322,7 +323,7 @@ def _ask(db_session, llm, embedder, reranker, llm_breaker=None) -> TestClient:
 
 
 def _bearer(role: str) -> dict[str, str]:
-    return {"Authorization": f"Bearer {issue_token(role, get_settings().jwt_secret)}"}
+    return {"Authorization": f"Bearer {issue_token(role, get_settings().jwt_secret, 'ACCT-4401')}"}
 
 
 def _seed(db_session, public_text: str, finance_text: str) -> None:

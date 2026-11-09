@@ -13,12 +13,14 @@ from sqlalchemy.orm import Session, sessionmaker
 
 from supportdesk.access import allowed_levels
 from supportdesk.agent import REFUSAL, run_agent
-from supportdesk.auth import TokenError, read_role
+from supportdesk.auth import Principal, TokenError, read_principal
 from supportdesk.breaker import CircuitBreaker
 from supportdesk.cache import (
     CacheHit,
     access_scope,
+    cacheable_answer,
     exact_cache_key,
+    load_corpus_version,
     lookup_exact,
     lookup_semantic,
     store_answer,
@@ -185,7 +187,7 @@ def create_app(
         credentials: HTTPAuthorizationCredentials | None = Depends(_bearer),
     ) -> SearchResponse:
         note_route("search")
-        role = _role_from_header(credentials)
+        role = _principal_from_header(credentials).role
         note_role(role)
         hits = _search_hits(app, role, body.query)
         note_status("ok")
@@ -197,7 +199,8 @@ def create_app(
         credentials: HTTPAuthorizationCredentials | None = Depends(_bearer),
     ) -> AskResponse:
         note_route("ask")
-        role = _role_from_header(credentials)
+        principal = _principal_from_header(credentials)
+        role = principal.role
         note_role(role)
         llm = _llm(app)
         settings = get_settings()
@@ -232,6 +235,7 @@ def create_app(
         result = run_agent(
             body.query,
             role,
+            account_id=principal.sub,
             llm=_bound_model(llm, model_id),
             search_fn=lambda query: _search_hits(app, role, query, compress=True),
             crm=_crm(app),
@@ -242,7 +246,7 @@ def create_app(
         if result.status == "unavailable":
             note_error("LLMUnavailable")
         _note_generation_cost(app, model_id)
-        if result.status == "answered" and result.answer:
+        if result.status == "answered" and result.answer and cacheable_answer(result.tools):
             _store_cache(app, role, body.query, model_id, query_vector, result.answer, result.steps)
         return AskResponse(
             role=role,
@@ -262,16 +266,17 @@ def create_app(
         credentials: HTTPAuthorizationCredentials | None = Depends(_bearer),
     ) -> dict[str, str]:
         note_route("confirm")
-        role = _role_from_header(credentials)
+        principal = _principal_from_header(credentials)
+        role = principal.role
         note_role(role)
         store = _confirmations(app)
         try:
-            item = store.get(confirmation_id, role)
+            item = store.get(confirmation_id, role, principal.sub)
         except KeyError as exc:
             raise HTTPException(status_code=404, detail="unknown confirmation") from exc
         except PermissionError as exc:
             raise HTTPException(
-                status_code=403, detail="confirmation belongs to another role"
+                status_code=403, detail="confirmation belongs to another subject"
             ) from exc
         try:
             ticket = _crm(app).create_ticket(item["summary"], item["account_id"])
@@ -289,11 +294,11 @@ def create_app(
     return app
 
 
-def _role_from_header(credentials: HTTPAuthorizationCredentials | None) -> str:
+def _principal_from_header(credentials: HTTPAuthorizationCredentials | None) -> Principal:
     if credentials is None or credentials.scheme.lower() != "bearer":
         raise HTTPException(status_code=401, detail="missing bearer token")
     try:
-        return read_role(credentials.credentials, get_settings().jwt_secret)
+        return read_principal(credentials.credentials, get_settings().jwt_secret)
     except TokenError as exc:
         raise HTTPException(status_code=401, detail="invalid bearer token") from exc
 
@@ -445,17 +450,29 @@ def _read_cache(
     if not _cache_enabled(app):
         return None, None
     scope = access_scope(role)
+    ttl_seconds = get_settings().cache_ttl_seconds
+    threshold = app.state.semantic_cache_distance
     factory = _session_factory(app)
-    key = exact_cache_key(query, scope, model_id)
     with factory() as session:
-        hit = lookup_exact(session, key, scope, model_id)
+        corpus = load_corpus_version(session)
+        key = exact_cache_key(query, scope, model_id, corpus)
+        hit = lookup_exact(session, key, scope, model_id, ttl_seconds=ttl_seconds)
     if hit is not None:
         return hit, None
     vector = _query_vector(app, query)
-    if vector is None:
-        return None, None
+    if vector is None or threshold is None:
+        return None, vector
     with factory() as session:
-        hit = lookup_semantic(session, vector, scope, model_id, app.state.semantic_cache_distance)
+        corpus = load_corpus_version(session)
+        hit = lookup_semantic(
+            session,
+            vector,
+            scope,
+            model_id,
+            corpus,
+            threshold,
+            ttl_seconds=ttl_seconds,
+        )
     return hit, vector
 
 
@@ -488,6 +505,7 @@ def _store_cache(
             query=query,
             scope=access_scope(role),
             model=model_id,
+            corpus=load_corpus_version(session),
             embedding=vector,
             answer=answer,
             steps=steps,

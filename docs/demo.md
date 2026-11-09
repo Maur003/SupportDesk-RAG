@@ -47,7 +47,7 @@ Invoke-RestMethod http://localhost:8000/health
 That returns `status` = `ok`.
 
 ```powershell
-$token = python -m supportdesk.token customer
+$token = python -m supportdesk.token customer ACCT-4401
 $headers = @{ Authorization = "Bearer $token" }
 Invoke-RestMethod -Method Post -Uri http://localhost:8000/search -Headers $headers -ContentType "application/json" -Body '{"query":"FINANCE_CANARY_7K2M"}'
 ```
@@ -66,9 +66,9 @@ After one search, `http://localhost:8000/metrics` includes `supportdesk_requests
 
 `POST /ask` reads the role from the bearer token, then chooses a model from the normalized length. At most 80 characters uses `gemini-2.5-flash`. A longer question uses `gemini-3.8-flash`.
 
-The exact cache is the hash of that question, the model id, and the sorted access scope. The SQL lookup repeats the scope. A miss embeds the question and accepts the nearest cached embedding in the same scope and model when the cosine distance is at or under 0.05. A hit returns the stored answer and does not call the model.
+The exact cache hashes that question, the model id, the sorted access scope, and a hash of every chunk hash. The SQL lookup repeats the scope and skips a row older than the cache TTL. Semantic lookup is off unless `SEMANTIC_CACHE_DISTANCE` is set. A hit returns the stored answer and does not call the model. Only an answer whose only tool was `search_knowledge_base` is stored.
 
-A miss retrieves with `access_level = ANY(...)`, fuses the vector and keyword lists, and reranks. Compression then dedupes and stops at 2000 tokens. An empty list returns `I don't know` and does not call the model. Otherwise the manual tool loop runs, at most five model calls. `create_ticket` stops with `confirmation_required`. `POST /confirmations/{id}` with the same role is the write to the mock CRM. The seed ticket is `TCK-1001`.
+A miss retrieves with `access_level = ANY(...)`, fuses the vector and keyword lists, and reranks. Compression then dedupes and stops at 2000 tokens. An empty list returns `I don't know` and does not call the model. Otherwise the manual tool loop runs, at most five model calls. `create_ticket` stops with `confirmation_required`. `POST /confirmations/{id}` with the same `sub` writes to the mock CRM, and the confirmation expires after five minutes. The seed ticket is `TCK-1001`, on account `ACCT-4401`.
 
 ```mermaid
 flowchart TD

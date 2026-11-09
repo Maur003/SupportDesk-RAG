@@ -23,6 +23,9 @@ GEMINI_3_8_FLASH_INPUT_AFTER = Decimal("1.50")
 GEMINI_3_8_FLASH_OUTPUT_AFTER = Decimal("7.50")
 GEMINI_2_5_FLASH_INPUT = Decimal("0.30")
 GEMINI_2_5_FLASH_OUTPUT = Decimal("2.50")
+DEFAULT_JWT_SECRET = "supportdesk-dev-secret"
+DEFAULT_CRM_API_KEY = "supportdesk-crm-dev"
+CACHE_TTL_SECONDS = 86400
 
 
 class Settings(BaseSettings):
@@ -34,8 +37,9 @@ class Settings(BaseSettings):
     Automatic function calling stays disabled. Tests inject a fake and do not call Gemini.
 
     Token prices are the module constants above, not environment variables.
-    A short query uses cheap_model. The exact cache key includes the access scope,
-    and the semantic lookup filters on that same scope.
+    A short query uses cheap_model. The exact cache key includes the access scope
+    and the corpus version. Semantic lookup is off unless semantic_cache_distance
+    is set. When ENV is production, the default JWT secret and CRM key are refused.
     """
 
     model_config = SettingsConfigDict(
@@ -61,9 +65,10 @@ class Settings(BaseSettings):
     judge_temperature: float = 0.0
     gemini_api_key: str = ""
     generator_temperature: float = 0.0
-    jwt_secret: str = "supportdesk-dev-secret"
+    env: str = "development"
+    jwt_secret: str = DEFAULT_JWT_SECRET
     crm_base_url: str = "http://localhost:8001"
-    crm_api_key: str = "supportdesk-crm-dev"
+    crm_api_key: str = DEFAULT_CRM_API_KEY
     crm_timeout_seconds: float = 2.0
     crm_retry_attempts: int = 3
     crm_retry_backoff_seconds: float = 0.2
@@ -71,7 +76,8 @@ class Settings(BaseSettings):
     llm_retry_backoff_seconds: float = 0.2
     circuit_failure_threshold: int = 3
     circuit_reset_seconds: float = 30.0
-    semantic_cache_distance: float = 0.05
+    semantic_cache_distance: float | None = None
+    cache_ttl_seconds: int = CACHE_TTL_SECONDS
     max_context_tokens: int = 2000
     min_context_score: float | None = None
 
@@ -93,6 +99,11 @@ class Settings(BaseSettings):
             raise ValueError("jwt_secret must not be empty")
         if not self.crm_api_key.strip():
             raise ValueError("crm_api_key must not be empty")
+        if self.env == "production":
+            if self.jwt_secret == DEFAULT_JWT_SECRET:
+                raise ValueError("jwt_secret must not be the default when env is production")
+            if self.crm_api_key == DEFAULT_CRM_API_KEY:
+                raise ValueError("crm_api_key must not be the default when env is production")
         if self.crm_timeout_seconds <= 0:
             raise ValueError("crm_timeout_seconds must be > 0")
         if self.crm_retry_attempts < 1:
@@ -113,8 +124,10 @@ class Settings(BaseSettings):
             raise ValueError("cheap_model must be a different model id than generator_model")
         if self.simple_query_max_chars < 0:
             raise ValueError("simple_query_max_chars must be >= 0")
-        if self.semantic_cache_distance < 0:
+        if self.semantic_cache_distance is not None and self.semantic_cache_distance < 0:
             raise ValueError("semantic_cache_distance must be >= 0")
+        if self.cache_ttl_seconds < 1:
+            raise ValueError("cache_ttl_seconds must be >= 1")
         if self.max_context_tokens < 1:
             raise ValueError("max_context_tokens must be >= 1")
         _require_commit(self.embedding_revision, "embedding_revision")

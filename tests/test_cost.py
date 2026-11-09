@@ -1,6 +1,6 @@
 import json
 import logging
-from datetime import date
+from datetime import UTC, date, datetime, timedelta
 from decimal import Decimal
 
 import pytest
@@ -12,6 +12,7 @@ from supportdesk.cache import (
     ScopeCache,
     access_scope,
     exact_cache_key,
+    load_corpus_version,
     lookup_exact,
     lookup_semantic,
     normalize_query,
@@ -21,7 +22,7 @@ from supportdesk.compress import ContextChunk, compress_context
 from supportdesk.config import GEMINI_2_5_FLASH, GEMINI_3_8_FLASH, get_settings
 from supportdesk.cost import render, simulate
 from supportdesk.db import make_session_factory
-from supportdesk.llm import ModelTurn
+from supportdesk.llm import ModelTurn, ToolCall
 from supportdesk.main import create_app
 from supportdesk.models import Chunk, Document, RequestLog, ResponseCache
 from supportdesk.pricing import cost_usd, format_usd, rates
@@ -59,6 +60,8 @@ class _Counter:
 
     def generate(self, messages: list[dict]) -> ModelTurn:
         self.calls += 1
+        if not any(message.get("role") == "tool" for message in messages):
+            return ModelTurn("", ToolCall("search_knowledge_base", {"query": "billing"}))
         return ModelTurn(
             self.text,
             input_tokens=self.input_tokens,
@@ -68,9 +71,14 @@ class _Counter:
 
 def test_exact_key_includes_scope_and_ignores_case_and_spacing() -> None:
     assert normalize_query("  Hello   WORLD ") == "hello world"
-    assert exact_cache_key("Hello", "public", "m") == exact_cache_key("  hello ", "public", "m")
-    assert exact_cache_key("hello", "public", "m") != exact_cache_key(
-        "hello", access_scope("finance"), "m"
+    assert exact_cache_key("Hello", "public", "m", "v") == exact_cache_key(
+        "  hello ", "public", "m", "v"
+    )
+    assert exact_cache_key("hello", "public", "m", "v") != exact_cache_key(
+        "hello", access_scope("finance"), "m", "v"
+    )
+    assert exact_cache_key("hello", "public", "m", "v") != exact_cache_key(
+        "hello", "public", "m", "v2"
     )
     assert access_scope("customer") == "public"
     assert access_scope("finance") == "agent,finance,public"
@@ -138,11 +146,14 @@ def test_compress_keeps_the_higher_score_inside_the_cap() -> None:
 
 def test_scope_cache_misses_a_different_role() -> None:
     cache = ScopeCache(0.05)
-    cache.store(LONG, access_scope("finance"), GEMINI_3_8_FLASH, VECTOR)
-    assert cache.lookup(LONG, access_scope("customer"), GEMINI_3_8_FLASH, VECTOR) is None
-    assert cache.lookup(LONG, access_scope("finance"), GEMINI_3_8_FLASH, VECTOR) == "exact"
-    assert cache.lookup(PARTNER, access_scope("finance"), GEMINI_3_8_FLASH, VECTOR) == "semantic"
-    assert cache.lookup(PARTNER, access_scope("finance"), GEMINI_3_8_FLASH, OTHER) is None
+    cache.store(LONG, access_scope("finance"), GEMINI_3_8_FLASH, VECTOR, "v")
+    assert cache.lookup(LONG, access_scope("customer"), GEMINI_3_8_FLASH, VECTOR, "v") is None
+    assert cache.lookup(LONG, access_scope("finance"), GEMINI_3_8_FLASH, VECTOR, "v") == "exact"
+    assert (
+        cache.lookup(PARTNER, access_scope("finance"), GEMINI_3_8_FLASH, VECTOR, "v") == "semantic"
+    )
+    assert cache.lookup(PARTNER, access_scope("finance"), GEMINI_3_8_FLASH, OTHER, "v") is None
+    assert cache.lookup(LONG, access_scope("finance"), GEMINI_3_8_FLASH, VECTOR, "other") is None
 
 
 def test_cost_script_counts_assumed_tokens() -> None:
@@ -184,7 +195,7 @@ def test_exact_hit_skips_the_model_and_bills_zero(db_session, caplog) -> None:
     assert second.json()["cache_hit"] == "exact"
     assert second.json()["answer"] == "public answer"
     assert second.json()["steps"] == 0
-    assert llm.calls == 1
+    assert llm.calls == 2
     events = [event for event in _events(caplog) if event.get("route") == "ask"]
     assert events[0]["cost_usd"] == pytest.approx(
         float(cost_usd(GEMINI_3_8_FLASH, 200, 80, AS_OF)), abs=1e-8
@@ -208,6 +219,7 @@ def test_customer_cannot_read_a_finance_cache_row(db_session) -> None:
         query=LONG,
         scope=access_scope("finance"),
         model=GEMINI_3_8_FLASH,
+        corpus=load_corpus_version(db_session),
         embedding=VECTOR,
         answer=FINANCE_ANSWER,
         steps=1,
@@ -218,7 +230,7 @@ def test_customer_cannot_read_a_finance_cache_row(db_session) -> None:
     assert missed.json()["answer"] == "public answer"
     assert FINANCE_ANSWER not in missed.text
     assert missed.json()["cache_hit"] is None
-    assert customer_llm.calls == 1
+    assert customer_llm.calls == 2
     finance_llm = _Counter("should not run")
     finance = _client(db_session, finance_llm)
     hit = finance.post("/ask", headers=_bearer("finance"), json={"query": LONG})
@@ -228,22 +240,34 @@ def test_customer_cannot_read_a_finance_cache_row(db_session) -> None:
 
 
 def test_exact_lookup_also_filters_the_scope_column(db_session) -> None:
-    key = exact_cache_key(LONG, access_scope("customer"), GEMINI_3_8_FLASH)
+    key = exact_cache_key(LONG, access_scope("customer"), GEMINI_3_8_FLASH, "v")
     db_session.add(
         ResponseCache(
             cache_key=key,
             access_scope=access_scope("finance"),
             model=GEMINI_3_8_FLASH,
+            corpus_version="v",
             query_text=normalize_query(LONG),
             embedding=VECTOR,
             response={"answer": FINANCE_ANSWER, "steps": 1},
         )
     )
     db_session.commit()
-    assert lookup_exact(db_session, key, access_scope("customer"), GEMINI_3_8_FLASH) is None
-    finance_key = exact_cache_key(LONG, access_scope("finance"), GEMINI_3_8_FLASH)
-    assert lookup_exact(db_session, finance_key, access_scope("finance"), GEMINI_3_8_FLASH) is None
-    assert lookup_exact(db_session, key, access_scope("finance"), GEMINI_3_8_FLASH) is not None
+    assert (
+        lookup_exact(db_session, key, access_scope("customer"), GEMINI_3_8_FLASH, ttl_seconds=3600)
+        is None
+    )
+    finance_key = exact_cache_key(LONG, access_scope("finance"), GEMINI_3_8_FLASH, "v")
+    assert (
+        lookup_exact(
+            db_session, finance_key, access_scope("finance"), GEMINI_3_8_FLASH, ttl_seconds=3600
+        )
+        is None
+    )
+    assert (
+        lookup_exact(db_session, key, access_scope("finance"), GEMINI_3_8_FLASH, ttl_seconds=3600)
+        is not None
+    )
 
 
 def test_semantic_lookup_stays_inside_one_scope(db_session) -> None:
@@ -252,33 +276,71 @@ def test_semantic_lookup_stays_inside_one_scope(db_session) -> None:
         query=LONG,
         scope=access_scope("finance"),
         model=GEMINI_3_8_FLASH,
+        corpus="v",
         embedding=VECTOR,
         answer=FINANCE_ANSWER,
         steps=1,
     )
     assert (
-        lookup_semantic(db_session, VECTOR, access_scope("finance"), GEMINI_3_8_FLASH, 0.05)
+        lookup_semantic(
+            db_session,
+            VECTOR,
+            access_scope("finance"),
+            GEMINI_3_8_FLASH,
+            "v",
+            0.05,
+            ttl_seconds=3600,
+        )
         is not None
     )
     assert (
-        lookup_semantic(db_session, VECTOR, access_scope("customer"), GEMINI_3_8_FLASH, 0.05)
+        lookup_semantic(
+            db_session,
+            VECTOR,
+            access_scope("customer"),
+            GEMINI_3_8_FLASH,
+            "v",
+            0.05,
+            ttl_seconds=3600,
+        )
         is None
     )
     assert (
-        lookup_semantic(db_session, OTHER, access_scope("finance"), GEMINI_3_8_FLASH, 0.05) is None
+        lookup_semantic(
+            db_session,
+            OTHER,
+            access_scope("finance"),
+            GEMINI_3_8_FLASH,
+            "v",
+            0.05,
+            ttl_seconds=3600,
+        )
+        is None
+    )
+    assert (
+        lookup_semantic(
+            db_session,
+            VECTOR,
+            access_scope("finance"),
+            GEMINI_3_8_FLASH,
+            "v",
+            None,
+            ttl_seconds=3600,
+        )
+        is None
     )
 
 
 def test_same_vector_reuses_the_answer_for_that_role(db_session) -> None:
     _seed(db_session)
     llm = _Counter("alpha")
-    client = _client(db_session, llm)
+    client = _client(db_session, llm, semantic_cache_distance=0.05)
     first = client.post("/ask", headers=_bearer("customer"), json={"query": LONG})
     second = client.post("/ask", headers=_bearer("customer"), json={"query": PARTNER})
     assert first.json()["cache_hit"] is None
     assert second.json()["cache_hit"] == "semantic"
     assert second.json()["answer"] == "alpha"
-    assert llm.calls == 1
+    assert llm.calls == 2
 
 
 def test_over_cap_context_refuses_without_the_model(db_session, caplog) -> None:
@@ -306,7 +368,96 @@ def test_ask_reports_the_routed_model(db_session) -> None:
     assert long.json()["model"] == GEMINI_3_8_FLASH
     assert short.json()["cache_hit"] is None
     assert long.json()["cache_hit"] is None
-    assert llm.calls == 2
+    assert llm.calls == 4
+
+
+def test_semantic_cache_stays_off_when_no_distance_is_configured(db_session) -> None:
+    _seed(db_session)
+    llm = _Counter("alpha")
+    client = _client(db_session, llm)
+    client.post("/ask", headers=_bearer("customer"), json={"query": LONG})
+    second = client.post("/ask", headers=_bearer("customer"), json={"query": PARTNER})
+    assert second.json()["cache_hit"] is None
+    assert second.json()["answer"] == "alpha"
+    assert llm.calls == 4
+
+
+def test_an_answer_that_did_not_only_search_is_not_cached(db_session) -> None:
+    _seed(db_session)
+    llm = _Math()
+    client = _client(db_session, llm)
+    first = client.post("/ask", headers=_bearer("customer"), json={"query": LONG})
+    second = client.post("/ask", headers=_bearer("customer"), json={"query": LONG})
+    assert first.json()["cache_hit"] is None
+    assert second.json()["cache_hit"] is None
+    assert llm.calls == 4
+
+
+def test_a_changed_chunk_hash_invalidates_the_cache(db_session) -> None:
+    _seed(db_session)
+    llm = _Counter("public answer")
+    client = _client(db_session, llm)
+    first = client.post("/ask", headers=_bearer("customer"), json={"query": LONG})
+    assert first.json()["cache_hit"] is None
+    chunk = db_session.get(Chunk, "public-doc#0")
+    assert chunk is not None
+    chunk.content_hash = "e" * 64
+    db_session.commit()
+    second = client.post("/ask", headers=_bearer("customer"), json={"query": LONG})
+    assert second.json()["cache_hit"] is None
+    assert second.json()["answer"] == "public answer"
+    assert llm.calls == 4
+
+
+def test_a_cache_row_older_than_the_ttl_is_a_miss(db_session) -> None:
+    _seed(db_session)
+    corpus = load_corpus_version(db_session)
+    store_answer(
+        db_session,
+        query=LONG,
+        scope=access_scope("customer"),
+        model=GEMINI_3_8_FLASH,
+        corpus=corpus,
+        embedding=VECTOR,
+        answer="public answer",
+        steps=2,
+    )
+    key = exact_cache_key(LONG, access_scope("customer"), GEMINI_3_8_FLASH, corpus)
+    assert (
+        lookup_exact(db_session, key, access_scope("customer"), GEMINI_3_8_FLASH, ttl_seconds=3600)
+        is not None
+    )
+    row = db_session.scalar(select(ResponseCache))
+    assert row is not None
+    row.created_at = datetime.now(UTC) - timedelta(seconds=3601)
+    db_session.commit()
+    assert (
+        lookup_exact(db_session, key, access_scope("customer"), GEMINI_3_8_FLASH, ttl_seconds=3600)
+        is None
+    )
+    assert (
+        lookup_semantic(
+            db_session,
+            VECTOR,
+            access_scope("customer"),
+            GEMINI_3_8_FLASH,
+            corpus,
+            0.05,
+            ttl_seconds=3600,
+        )
+        is None
+    )
+
+
+class _Math:
+    def __init__(self) -> None:
+        self.calls = 0
+
+    def generate(self, messages: list[dict]) -> ModelTurn:
+        self.calls += 1
+        if not any(message.get("role") == "tool" for message in messages):
+            return ModelTurn("", ToolCall("calculate", {"expression": "1+1"}))
+        return ModelTurn("2")
 
 
 def _client(db_session, llm, **kwargs) -> TestClient:
@@ -322,7 +473,7 @@ def _client(db_session, llm, **kwargs) -> TestClient:
 
 
 def _bearer(role: str) -> dict[str, str]:
-    return {"Authorization": f"Bearer {issue_token(role, get_settings().jwt_secret)}"}
+    return {"Authorization": f"Bearer {issue_token(role, get_settings().jwt_secret, 'ACCT-4401')}"}
 
 
 def _seed(db_session, tokens: int = 4) -> None:

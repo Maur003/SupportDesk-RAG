@@ -1,8 +1,8 @@
 # SupportDesk RAG
 
-Synthetic customer-support agent for the fictional carrier **Northline Telecom**. Every document and gold question is synthetic. Nothing here is a real carrier's policy.
+Synthetic customer-support agent for the fictional carrier **Northline Telecom**. Every document and gold question is synthetic. Nothing here is a real carrier's policy. The corpus is padded and templated: `tools/expand_corpus.py` repeats the same neighboring-tier sentences and swaps the price and the speed.
 
-This repository is at the end of Phase 10. [`docs/demo.md`](docs/demo.md) is the walkthrough. The tables below are the stdout of `make eval` and `make cost` from the phases that produced them. `POST /ask` checks an exact cache, then a semantic cache. Both require the caller's access scope. A question of at most 80 normalized characters is priced on `gemini-2.5-flash`. Each logged request gets a trace id, one JSON line, and a `/metrics` count. The ask loop is at most five model calls, and an empty retrieval returns "I don't know" without calling the model. `POST /search` takes the role from a signed token and keeps the SQL access filter. `u01`–`u10` are unfilled, so they are outside the scored `n`. Refusal on the gold unanswerable set is not scored. A difference of one or two questions is reported as that count. Every comparison shows `n`, the corpus size, and the per-question wins, losses, and ties. `recall@20` is not reported. The cutoff is `recall@5`.
+This repository is at the end of Phase 10. [`docs/demo.md`](docs/demo.md) is the walkthrough. The phase tables below are the stdout of `make eval` and `make cost` from the phases that produced them. The cost table is a simulation: assumed token counts, no Gemini call. `POST /ask` checks an exact cache. A semantic cache runs only when `SEMANTIC_CACHE_DISTANCE` is set. Both require the caller's access scope and the current corpus version. A question of at most 80 normalized characters is priced on `gemini-2.5-flash`. Each logged request gets a trace id, one JSON line, and a `/metrics` count. The ask loop is at most five model calls, and an empty retrieval returns "I don't know" without calling the model. `POST /search` takes the role from a signed token and keeps the SQL access filter. `u01`–`u10` are unfilled, so they are outside the scored `n`. Refusal on the gold unanswerable set is not scored. A difference of one or two questions is reported as that count. Every comparison shows `n`, the corpus size, and the per-question wins, losses, and ties. `recall@20` is not reported. The cutoff is `recall@5`.
 
 ## Gold set
 
@@ -127,7 +127,7 @@ A second `make eval` printed the same table. `precision@5` divides by 5, so one 
 
 The paraphrase group is 7 wins and 15 ties. All 15 ties are recall 0 for both methods. Agent is 4 wins out of 10. Finance is 3 wins out of 10. Those ties are misses too. Permission traps and unanswerable questions are 0 for both methods. The random draw only uses chunks that role may see, and the absent terms do not occur in the corpus.
 
-`make eval` exits if the vector or the hybrid answerable recall@5 falls below 0.50, if the rerank answerable recall@5 falls below 0.55, or if any of the three scores above 0 on a permission trap or an unanswerable question. Those thresholds are guards. The measured figures are below.
+`make eval` exits if answerable vector recall@5 falls below 0.50, if answerable hybrid recall@5 falls below 0.40, if answerable rerank recall@5 falls below 0.55, or if any of those three scores above 0 on a permission trap or an unanswerable question. Those thresholds are guards. The hybrid guard is 0.40 because the OR run measured hybrid recall@5 at 0.4524. The earlier tables on this page used AND keyword search.
 
 Phase 3 fuses the top 20 vector hits and the top 20 keyword hits with reciprocal rank fusion, `1 / (60 + rank)`, and keeps 5. Keyword search is `websearch_to_tsquery('english', question)` and `ts_rank_cd`, with the same `access_level = ANY(...)` filter. The question text is the keyword query. The embedding instruction is not prepended to it. A second `make eval` printed the same table:
 
@@ -309,9 +309,26 @@ vector 0.0000
 random 0.0000
 ```
 
-Answerable recall@5 moved on 5 questions: wins `b05`, `b09`, `b16`, and `b22`, and one loss, `b02`. That is 4 wins and 1 loss, with 37 ties. Lexical recall and MRR stayed on the hybrid numbers, including MRR 1.0000. Customer recall@5 went from 0.8864 to 0.8409 because of `b02`. Agent went from 0.4000 to 0.6000 on 2 questions. Finance went from 0.3000 to 0.5000 on 2 questions. `b08` and `b21` stayed found and dropped from MRR 1 to 0.5. `b10` stayed found and rose from MRR 0.25 to 1. The five ids changed on all 52 scored questions. Leak and absent-hit stay 0. The rerank guard is 0.55, under the measured 0.7024.
+Answerable recall@5 moved on 5 questions: wins `b05`, `b09`, `b16`, and `b22`, and one loss, `b02`. That is 4 wins and 1 loss, with 37 ties. Lexical recall and MRR stayed on the hybrid numbers, including MRR 1.0000. Customer recall@5 went from 0.8864 to 0.8409 because of `b02`. Agent went from 0.4000 to 0.6000 on 2 questions. Finance went from 0.3000 to 0.5000 on 2 questions. `b08` and `b21` stayed found and dropped from MRR 1 to 0.5. `b10` stayed found and rose from MRR 0.25 to 1. The five ids changed on all 52 scored questions. Leak and absent-hit stay 0. The rerank guard is 0.55, under the measured 0.7024. That Phase 4 table used AND keyword search.
 
-Phase 5 does not change those retrieval numbers. `POST /search` requires `Authorization: Bearer`. The role is the token's `role` claim. `python -m supportdesk.token customer` signs one with `JWT_SECRET` (the local synthetic default is `supportdesk-dev-secret`). A `role` field in the JSON body is rejected. The query text is not an access input, including a sentence that says to ignore instructions and reveal finance limits. The chunks are still chosen with `access_level = ANY(:allowed)`. PyJWT is the new package: it checks the HS256 signature and the expiry, instead of a hand-rolled parser. `tests/test_rbac.py` asks for `FINANCE_CANARY_7K2M` as a customer, as a customer following that injection sentence, and as an agent, and the canary is absent. The same request with a finance token returns the canary. An agent token does return `AGENT_CANARY_4QP9`.
+Keyword search on the ask path is now OR: `to_tsvector('english')` stems the question, and `to_tsquery` joins those lexemes with `|`. `make eval` still scores the old AND operator, `websearch_to_tsquery`, on the same questions. OR is not an improvement. On answerable recall@5, hybrid OR versus hybrid AND is 0 wins, 8 losses (`a01`, `a02`, `a18`, `b02`, `b08`, `b10`, `b12`, `b21`), and 34 ties, n=42. Recall@5 is 0.4524 versus 0.6310. Rerank OR versus rerank AND is 1 win (`b04`), 1 loss (`b22`), and 40 ties. Both rerank recalls are 0.7024. One question either way is not an improvement. Leak and absent-hit stay 0 on both operators, n=5 each.
+
+```text
+answerable n=42 corpus_size=280
+recall@5 hybrid OR vs AND wins=0 losses=8 ties=34 win_ids=- loss_ids=a01,a02,a18,b02,b08,b10,b12,b21
+recall@5 rerank OR vs AND wins=1 losses=1 ties=40 win_ids=b04 loss_ids=b22
+method      recall@5  precision@5  MRR     nDCG@5
+rerank_or   0.7024  0.1429  0.6179  0.6324
+hybrid_or   0.4524  0.0905  0.3437  0.3696
+rerank_and  0.7024  0.1429  0.6448  0.6533
+hybrid_and  0.6310  0.1286  0.6131  0.6113
+vector      0.6310  0.1286  0.6131  0.6113
+random      0.0238  0.0048  0.0048  0.0092
+```
+
+The same run, by group: lexical n=20, hybrid OR versus AND 0 wins, 3 losses (`a01`, `a02`, `a18`), 17 ties, and rerank 0/0/20. Paraphrase n=22, hybrid 0/5/17 (`b02`, `b08`, `b10`, `b12`, `b21`), rerank 1/1/20 (`b04` / `b22`). Customer n=22, hybrid 0/4/18 (`a01`, `a02`, `a18`, `b02`), rerank 1/0/21 (`b04`). Agent n=10, hybrid 0/3/7 (`b08`, `b10`, `b12`), rerank 0/0/10. Finance n=10, hybrid 0/1/9 (`b21`), rerank 0/1/9 (`b22`). `keyword_nonempty` is 52 for OR and 7 for AND. `reports/retrieval.json` is that run.
+
+Phase 5 does not change those retrieval numbers. `POST /search` requires `Authorization: Bearer`. The role is the token's `role` claim. `python -m supportdesk.token customer ACCT-4401` signs one with `JWT_SECRET` and a `sub` claim (the local synthetic default is `supportdesk-dev-secret`). A `role` field in the JSON body is rejected. The query text is not an access input, including a sentence that says to ignore instructions and reveal finance limits. The chunks are still chosen with `access_level = ANY(:allowed)`. PyJWT is the new package: it checks the HS256 signature and the expiry, instead of a hand-rolled parser. `tests/test_rbac.py` asks for `FINANCE_CANARY_7K2M` as a customer, as a customer following that injection sentence, and as an agent, and the canary is absent. The same request with a finance token returns the canary. An agent token does return `AGENT_CANARY_4QP9`.
 
 Phase 6 does not change those retrieval numbers. `POST /ask` uses the same bearer role. The loop calls the model, runs one tool, appends the tool result, and stops after five model calls. The tools are `search_knowledge_base`, `get_ticket_status`, `create_ticket`, and `calculate`. Search uses the same SQL role filter. `calculate` accepts only `+ - * /`, numbers, and parentheses. `create_ticket` does not write. The response is `confirmation_required`, and a later `POST /confirmations/{id}` with the same role performs the write. A `confirmed` flag from the model is ignored. There is no confirm tool.
 
@@ -319,14 +336,14 @@ Phase 7 does not change those retrieval numbers. If the role-scoped retrieval fo
 
 Phase 8 does not change those retrieval numbers. `GET /metrics` is Prometheus text from `prometheus-client`. That package is new because it is the client for `/metrics`, and it does not pull in an instrumentation framework. A request log is one JSON object on stdout and one `request_log` row. The fields are the trace id, route, role, status, embed/search/rerank/llm milliseconds, retrieved ids, scores, the stored token count of those chunks, and the model's prompt and candidate token counts when the turn reports them. Chunk text is not in the line or the row. `X-Trace-Id` is copied onto the response. `/health` and `/metrics` are not logged.
 
-Phase 9 does not change those retrieval numbers. No new package. Token prices are the 2026-10-30 constants in `config.py`: `gemini-3.8-flash` is $0.75 / $3.75 per 1M input and output tokens through 2026-12-31, then $1.50 / $7.50, and `gemini-2.5-flash` is $0.30 / $2.50. A question of at most 80 normalized characters uses `gemini-2.5-flash`. A longer question uses `gemini-3.8-flash`. The exact cache key hashes that normalized question, the model id, and the sorted access scope. The SQL lookup also filters on `access_scope`, so a finance row is not returned to a customer. After an exact miss, the nearest cached query embedding in that same scope and model is reused when cosine distance is at or under 0.05. That distance was not tuned on the gold set. Context compression dedupes chunk ids, drops scores below `MIN_CONTEXT_SCORE` when that setting is set, and stops at `MAX_CONTEXT_TOKENS`. The default 2000 still holds five 400-token chunks. The log keeps the retrieval ids. The prompt sees the compressed list. `make cost` does not call Gemini. It bills 100 scripted questions at a fixed 200 input tokens and 80 output tokens. Those token counts are assumptions, not a Gemini usage report. A cache hit adds no generation cost.
+Phase 9 does not change those retrieval numbers. No new package. Token prices are the 2026-10-30 constants in `config.py`: `gemini-3.8-flash` is $0.75 / $3.75 per 1M input and output tokens through 2026-12-31, then $1.50 / $7.50, and `gemini-2.5-flash` is $0.30 / $2.50. A question of at most 80 normalized characters uses `gemini-2.5-flash`. A longer question uses `gemini-3.8-flash`. The exact cache key hashes that normalized question, the model id, the sorted access scope, and a hash of every chunk content hash. The SQL lookup also filters on `access_scope` and drops a row older than `CACHE_TTL_SECONDS` (86400). A finance row is not returned to a customer. An answer is stored only when `search_knowledge_base` was the only tool used. Semantic lookup is off unless `SEMANTIC_CACHE_DISTANCE` is set. The old 0.05 cutoff was not tuned on the gold set. Context compression dedupes chunk ids, drops scores below `MIN_CONTEXT_SCORE` when that setting is set, and stops at `MAX_CONTEXT_TOKENS`. The default 2000 still holds five 400-token chunks. The log keeps the retrieval ids. The prompt sees the compressed list. `make cost` is a simulation. It does not call Gemini. It bills 100 scripted questions at a fixed 200 input tokens and 80 output tokens, and it turns a semantic distance of 0.05 on for that script only. The API default leaves the semantic cache off. A cache hit in the script adds no generation cost.
 
 ```
 prices_read=2026-10-30 billed_as_of=2026-11-08 n=100 assumed_input_tokens=200 assumed_output_tokens=80 scope=public token_source=assumed gemini_calls=0
 generator=gemini-3.8-flash usd_per_1m_in=0.75 usd_per_1m_out=3.75
 cheap=gemini-2.5-flash usd_per_1m_in=0.30 usd_per_1m_out=2.50
 generator_after_2026-12-31 usd_per_1m_in=1.50 usd_per_1m_out=7.50
-simple_query_max_chars=80 semantic_cache_distance=0.05
+simulation=true api_semantic_cache=disabled simple_query_max_chars=80 simulated_semantic_cache_distance=0.05
 exact_hits=30 semantic_hits=5 cheap_billed=20 generator_billed=45
 cost_per_100_before=0.04500000 cost_per_100_after=0.02545000
 ```
@@ -343,17 +360,17 @@ Torch is installed from the CPU index in `requirements-torch.txt` before the loc
 
 ## Request path
 
-`POST /ask` reads the role from the bearer token and picks the model from the normalized question length. The exact cache key is that question, the model id, and the sorted access scope. The SQL lookup repeats the scope. A miss then checks the nearest cached query embedding in the same scope and model, at cosine distance 0.05 or under. A hit returns the stored answer.
+`POST /ask` reads `role` and `sub` from the bearer token and picks the model from the normalized question length. The account on a ticket is `sub`. The exact cache key is that question, the model id, the sorted access scope, and the corpus version. The SQL lookup repeats the scope and the TTL. Semantic lookup runs only when a distance is configured. A hit returns the stored answer.
 
-A cache miss retrieves with `access_level = ANY(...)`, fuses vector and keyword lists, and reranks. Compression dedupes and stops at 2000 tokens. An empty list is "I don't know" with no model call. Otherwise the tool loop runs. `create_ticket` returns `confirmation_required` and stops. `POST /confirmations/{id}` for the same role writes the ticket. The diagram and the PowerShell calls are in [`docs/demo.md`](docs/demo.md).
+A cache miss retrieves with `access_level = ANY(...)`, fuses vector and OR keyword lists, and reranks. Compression dedupes and stops at 2000 tokens. An empty list is "I don't know" with no model call. Otherwise the tool loop runs. `create_ticket` returns `confirmation_required` and stops. `POST /confirmations/{id}` writes only for the same `sub`, and only within five minutes. The diagram and the PowerShell calls are in [`docs/demo.md`](docs/demo.md).
 
 ## Layout
 
-- `data/corpus/{public,agent,finance}` — synthetic knowledge base. `synthetic: true` is required on every file. `tools/expand_corpus.py` rewrites the long near-duplicate pages.
-- Retrieval embeds the document title, the heading path, and the chunk text (`src/supportdesk/embed_text.py`). The stored chunk text stays the body. Queries get the BGE instruction prefix. Vectors are L2-normalized. Search is exact cosine distance with `access_level = ANY(...)`. Keyword search uses that same filter. Hybrid fuses the two top-20 lists. The cross-encoder then reranks that fused 20 and keeps 5. `POST /search` and the agent's search tool apply that filter to the role in the bearer token. There is no HNSW index.
+- `data/corpus/{public,agent,finance}` — synthetic knowledge base. `synthetic: true` is required on every file. The long pages are padded templates: `tools/expand_corpus.py` repeats a neighboring-tier paragraph and changes the price and the speed.
+- Retrieval embeds the document title, the heading path, and the chunk text (`src/supportdesk/embed_text.py`). The stored chunk text stays the body. Queries get the BGE instruction prefix. Vectors are L2-normalized. Search is exact cosine distance with `access_level = ANY(...)`. Keyword search uses that same filter and ORs the question's English lexemes. Hybrid fuses the two top-20 lists. The cross-encoder then reranks that fused 20 and keeps 5. `POST /search` and the agent's search tool apply that filter to the role in the bearer token. There is no HNSW index.
 - `POST /ask` is the manual tool loop. `POST /confirmations/{id}` is the only ticket write. The mock CRM is `src/supportdesk/crm_server.py`, on port 8001.
 - `GET /metrics` and the `request_log` table record stage times, retrieved ids, scores, the routed model, the token cost, and `cache_hit`. The log line does not include chunk text.
-- `response_cache` stores an answer with its access scope, model id, and query embedding. Exact and semantic lookups both require that scope. `make cost` prices 100 scripted calls.
+- `response_cache` stores an answer with its access scope, model id, corpus version, and query embedding, and only when search was the only tool. Exact lookup requires that scope. Semantic lookup is off by default. `make cost` is a simulation of 100 scripted calls.
 - `src/supportdesk/ingest` — loaders, a 400-token chunker with 60 tokens of overlap, and hash-based re-ingest.
 - Chunk ids are `{doc_slug}#{ordinal}` and stay put while the file bytes and the chunker version stay put.
 
@@ -362,12 +379,14 @@ Model ids live in configuration (`GENERATOR_MODEL`, `JUDGE_MODEL`). The judge id
 ## Known limits
 
 - `u01`–`u10` are unfilled. The other gold questions are LLM-drafted, and `tests/test_gold.py` checks that the labeled fact is in the labeled chunk.
-- Faithfulness, answer relevance, and refusal accuracy are unmeasured. No request in this repository has called Gemini, and `client.models.list()` has not been run against Google. An empty `GEMINI_API_KEY` makes `POST /ask` return 503. `POST /search` still runs.
-- Short questions are answered by `gemini-2.5-flash`, the same id as `JUDGE_MODEL`. A judge for those answers needs a different id from the one that wrote them.
-- `make cost` uses assumed token counts. The line in the table says `token_source=assumed` and `gemini_calls=0`. The semantic distance 0.05 was not tuned on the gold paraphrases.
-- Hybrid search tied the vector list on all 42 answerable questions. Rerank against hybrid moved 5 of those questions: 4 wins and 1 loss, `b02`, with 37 ties.
+- The corpus is padded and templated. Neighboring plan pages share the same sentences with the price and the speed swapped.
+- Faithfulness, answer relevance, and refusal accuracy are unmeasured. An empty `GEMINI_API_KEY` makes `POST /ask` return 503. `POST /search` still runs.
+- Short questions are answered by `gemini-2.5-flash`, the same id as `JUDGE_MODEL`. A judge for those answers needs a different id from the one that wrote them. That model id returned 404 for this account.
+- `make cost` is a simulation. The line says `simulation=true`, `token_source=assumed`, and `gemini_calls=0`. The API semantic cache is off. The script's 0.05 distance is not the API default.
+- Query embeddings for the Fiber 500 and Fiber 1000 price questions are cosine distance 0.154993 apart. The opening paragraphs of those two plans are 0.081194 apart. Both are above 0.05. `tests/test_fiber_distance.py` checks those two measurements.
+- With OR keyword search, hybrid versus AND is 0 wins, 8 losses, and 34 ties on answerable recall@5, n=42. Rerank versus AND is 1 win, 1 loss, and 40 ties. The Phase 4 rerank-versus-hybrid count, 4 wins, 1 loss, 37 ties, was the AND operator.
 - The mock CRM and the confirmation store are in memory. A question that retrieves no chunk is refused before the model can call `get_ticket_status`.
 - Search is an exact scan. There is no HNSW index and no chat page. Swagger and the CLI are the UI.
 - `.github/workflows/ci.yml` is the suite a stranger's push runs. It has not been executed from this workspace.
 
-A Gemini key would let `list()` run once and a faithfulness judge score answers whose model id differs from the judge. Filling `u01`–`u10`, measuring the 0.05 distance on the paraphrase questions with `n` and wins, losses, and ties, and revisiting the sequential scan once the corpus is larger than a few hundred chunks are the follow-ons. They are not in the measured tables.
+Faithfulness is still unmeasured. Filling `u01`–`u10` and revisiting the sequential scan once the corpus is larger than a few hundred chunks are the follow-ons. They are not in the measured tables.

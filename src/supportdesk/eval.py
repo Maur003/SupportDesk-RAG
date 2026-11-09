@@ -20,6 +20,8 @@ from supportdesk.retrieve import (
     RETRIEVAL_K,
     RRF_K,
     candidate_lists,
+    fuse_rankings,
+    keyword_search,
     rerank_order,
     search_chunks,
 )
@@ -27,10 +29,12 @@ from supportdesk.retrieve import (
 GOLD_PATH = Path("data/gold/questions.json")
 REPORT_PATH = Path("reports/retrieval.json")
 RANDOM_SEED = 0
-# Guards, not the reported result. Measured answerable recall@5 was 0.6310
-# for vector and hybrid, and 0.7024 for rerank. The rerank guard sits under
-# that 0.7024.
-ANSWERABLE_RECALL_FLOOR = 0.50
+# Guards, not the reported result. The 2026-11-08 OR run measured answerable
+# recall@5 at 0.6310 vector, 0.4524 hybrid, and 0.7024 rerank. AND hybrid was
+# 0.6310. The hybrid guard sits under the OR number. The rerank guard sits
+# under 0.7024.
+VECTOR_RECALL_FLOOR = 0.50
+HYBRID_RECALL_FLOOR = 0.40
 RERANK_RECALL_FLOOR = 0.55
 
 
@@ -52,13 +56,18 @@ def main() -> None:
 
 def enforce_floors(report: dict) -> None:
     tables = {table["group"]: table for table in report["tables"]}
-    for side in ("vector", "hybrid"):
-        recall = tables["answerable"][side]["recall_at_5"]
-        if recall < ANSWERABLE_RECALL_FLOOR:
-            raise SystemExit(
-                f"answerable {side} recall@5 {recall:.4f} "
-                f"is below the guard {ANSWERABLE_RECALL_FLOOR:.2f}"
-            )
+    vector_recall = tables["answerable"]["vector"]["recall_at_5"]
+    if vector_recall < VECTOR_RECALL_FLOOR:
+        raise SystemExit(
+            f"answerable vector recall@5 {vector_recall:.4f} "
+            f"is below the guard {VECTOR_RECALL_FLOOR:.2f}"
+        )
+    hybrid_recall = tables["answerable"]["hybrid"]["recall_at_5"]
+    if hybrid_recall < HYBRID_RECALL_FLOOR:
+        raise SystemExit(
+            f"answerable hybrid recall@5 {hybrid_recall:.4f} "
+            f"is below the guard {HYBRID_RECALL_FLOOR:.2f}"
+        )
     rerank_recall = tables["answerable"]["rerank"]["recall_at_5"]
     if rerank_recall < RERANK_RECALL_FLOOR:
         raise SystemExit(
@@ -100,27 +109,45 @@ def evaluate(
             chunk_id for chunk_id, _distance in search_chunks(session, query_vector, allowed, k)
         ]
         random_ids = rng.sample(pool, k) if len(pool) >= k else list(pool)
-        _vector_ids, keyword_ids, fused_pool = candidate_lists(
+        vector_ids, keyword_ids, fused_pool = candidate_lists(
             session, question["question"], query_vector, allowed, CANDIDATE_K
         )
         fused = fused_pool[:k]
         passages = [_passage(catalog, chunk_id) for chunk_id in fused_pool]
         reranked = rerank_order(fused_pool, reranker.score(question["question"], passages), k)
+        and_keyword_ids = [
+            chunk_id
+            for chunk_id, _rank in keyword_search(
+                session, question["question"], allowed, CANDIDATE_K, mode="and"
+            )
+        ]
+        and_pool = [chunk_id for chunk_id, _score in fuse_rankings([vector_ids, and_keyword_ids])][
+            :CANDIDATE_K
+        ]
+        and_fused = and_pool[:k]
+        and_passages = [_passage(catalog, chunk_id) for chunk_id in and_pool]
+        and_reranked = rerank_order(and_pool, reranker.score(question["question"], and_passages), k)
         relevant = {support["chunk_id"] for support in question["supports"]}
         kind = question["type"]
         if kind == "answerable":
             rerank_metrics = _rank_metrics(reranked, relevant, k)
             hybrid_metrics = _rank_metrics(fused, relevant, k)
+            and_rerank_metrics = _rank_metrics(and_reranked, relevant, k)
+            and_hybrid_metrics = _rank_metrics(and_fused, relevant, k)
             vector_metrics = _rank_metrics(retrieved, relevant, k)
             random_metrics = _rank_metrics(random_ids, relevant, k)
         elif kind == "permission_trap":
             rerank_metrics = {"leak": _leaked(reranked, relevant, catalog, question)}
             hybrid_metrics = {"leak": _leaked(fused, relevant, catalog, question)}
+            and_rerank_metrics = {"leak": _leaked(and_reranked, relevant, catalog, question)}
+            and_hybrid_metrics = {"leak": _leaked(and_fused, relevant, catalog, question)}
             vector_metrics = {"leak": _leaked(retrieved, relevant, catalog, question)}
             random_metrics = {"leak": _leaked(random_ids, relevant, catalog, question)}
         elif kind == "unanswerable":
             rerank_metrics = {"absent_hit": _absent_hit(reranked, catalog, question)}
             hybrid_metrics = {"absent_hit": _absent_hit(fused, catalog, question)}
+            and_rerank_metrics = {"absent_hit": _absent_hit(and_reranked, catalog, question)}
+            and_hybrid_metrics = {"absent_hit": _absent_hit(and_fused, catalog, question)}
             vector_metrics = {"absent_hit": _absent_hit(retrieved, catalog, question)}
             random_metrics = {"absent_hit": _absent_hit(random_ids, catalog, question)}
         else:
@@ -133,9 +160,12 @@ def evaluate(
                 "wording": question.get("wording", "lexical"),
                 "rerank": rerank_metrics,
                 "hybrid": hybrid_metrics,
+                "and_rerank": and_rerank_metrics,
+                "and_hybrid": and_hybrid_metrics,
                 "vector": vector_metrics,
                 "random": random_metrics,
                 "keyword_count": len(keyword_ids),
+                "keyword_and_count": len(and_keyword_ids),
                 "top5_changed": fused != retrieved,
                 "rerank_changed": reranked != fused,
             }
@@ -150,12 +180,14 @@ def evaluate(
         "passage_input": "title, heading_path, text",
         "candidate_k": CANDIDATE_K,
         "rrf_k": RRF_K,
-        "keyword": "websearch_to_tsquery english, ts_rank_cd",
+        "keyword": "to_tsquery english OR of lexemes, ts_rank_cd",
+        "keyword_and": "websearch_to_tsquery english AND, ts_rank_cd",
         "rerank_model": reranker.model_id,
         "rerank_activation": "raw logit",
         "rerank_pool": "fused top candidate_k",
         "questions_scored": len(scored),
         "keyword_nonempty": sum(row["keyword_count"] > 0 for row in scored),
+        "keyword_and_nonempty": sum(row["keyword_and_count"] > 0 for row in scored),
         "top5_changed": sum(row["top5_changed"] for row in scored),
         "rerank_changed": sum(row["rerank_changed"] for row in scored),
         "tables": _tables(scored, corpus_size),
@@ -220,20 +252,32 @@ def _summarize(name: str, rows: list[dict], corpus_size: int) -> dict:
     if rows[0]["type"] == "answerable":
         versus_hybrid = _compare(rows, "recall_at_5", "rerank", "hybrid", higher_is_better=True)
         versus_random = _compare(rows, "recall_at_5", "rerank", "random", higher_is_better=True)
+        hybrid_or_vs_and = _compare(
+            rows, "recall_at_5", "hybrid", "and_hybrid", higher_is_better=True
+        )
+        rerank_or_vs_and = _compare(
+            rows, "recall_at_5", "rerank", "and_rerank", higher_is_better=True
+        )
         return {
             "group": name,
             "n": len(rows),
             "corpus_size": corpus_size,
             "rerank": _mean_metrics(rows, "rerank"),
             "hybrid": _mean_metrics(rows, "hybrid"),
+            "and_rerank": _mean_metrics(rows, "and_rerank"),
+            "and_hybrid": _mean_metrics(rows, "and_hybrid"),
             "vector": _mean_metrics(rows, "vector"),
             "random": _mean_metrics(rows, "random"),
             "rerank_vs_hybrid": versus_hybrid,
             "rerank_vs_random": versus_random,
+            "hybrid_or_vs_and": hybrid_or_vs_and,
+            "rerank_or_vs_and": rerank_or_vs_and,
         }
     key = "leak" if rows[0]["type"] == "permission_trap" else "absent_hit"
     versus_hybrid = _compare(rows, key, "rerank", "hybrid", higher_is_better=False)
     versus_random = _compare(rows, key, "rerank", "random", higher_is_better=False)
+    hybrid_or_vs_and = _compare(rows, key, "hybrid", "and_hybrid", higher_is_better=False)
+    rerank_or_vs_and = _compare(rows, key, "rerank", "and_rerank", higher_is_better=False)
     return {
         "group": name,
         "n": len(rows),
@@ -241,10 +285,14 @@ def _summarize(name: str, rows: list[dict], corpus_size: int) -> dict:
         "metric": key,
         "rerank": _mean_flag(rows, "rerank", key),
         "hybrid": _mean_flag(rows, "hybrid", key),
+        "and_rerank": _mean_flag(rows, "and_rerank", key),
+        "and_hybrid": _mean_flag(rows, "and_hybrid", key),
         "vector": _mean_flag(rows, "vector", key),
         "random": _mean_flag(rows, "random", key),
         "rerank_vs_hybrid": versus_hybrid,
         "rerank_vs_random": versus_random,
+        "hybrid_or_vs_and": hybrid_or_vs_and,
+        "rerank_or_vs_and": rerank_or_vs_and,
     }
 
 
@@ -257,6 +305,8 @@ def _compare(
     higher_is_better: bool,
 ) -> dict[str, int]:
     wins = losses = ties = 0
+    win_ids: list[str] = []
+    loss_ids: list[str] = []
     for row in rows:
         candidate = row[left][key]
         baseline = row[right][key]
@@ -264,9 +314,17 @@ def _compare(
             ties += 1
         elif (candidate > baseline) == higher_is_better:
             wins += 1
+            win_ids.append(row["id"])
         else:
             losses += 1
-    return {"wins": wins, "losses": losses, "ties": ties}
+            loss_ids.append(row["id"])
+    return {
+        "wins": wins,
+        "losses": losses,
+        "ties": ties,
+        "win_ids": win_ids,
+        "loss_ids": loss_ids,
+    }
 
 
 def _mean_metrics(rows: list[dict], side: str) -> dict[str, float]:
@@ -289,17 +347,20 @@ def render(report: dict) -> str:
         f"candidate_k: {report['candidate_k']}",
         f"rrf_k: {report['rrf_k']}",
         f"keyword: {report['keyword']}",
+        f"keyword_and: {report['keyword_and']}",
         f"rerank_model: {report['rerank_model']}",
         f"rerank_activation: {report['rerank_activation']}",
         f"rerank_pool: {report['rerank_pool']}",
         f"questions_scored: {report['questions_scored']}",
         f"keyword_nonempty: {report['keyword_nonempty']}",
+        f"keyword_and_nonempty: {report['keyword_and_nonempty']}",
         f"top5_changed: {report['top5_changed']}",
         f"rerank_changed: {report['rerank_changed']}",
         "",
         "rerank scores the fused top candidate_k passages and keeps k.",
         "scores are raw logits. recall@20 is not reported.",
-        "wins, losses, and ties are per question, rerank against hybrid and against random.",
+        "keyword OR is the ask path. keyword AND is websearch_to_tsquery, scored beside it.",
+        "wins, losses, and ties are per question.",
         "",
     ]
     for table in report["tables"]:
@@ -317,9 +378,13 @@ def _render_rank(table: dict) -> list[str]:
         _group_header(table),
         _pair_line("recall@5 rerank vs hybrid", table["rerank_vs_hybrid"]),
         _pair_line("recall@5 rerank vs random", table["rerank_vs_random"]),
-        "method     recall@5  precision@5  MRR     nDCG@5",
-        _rank_row("rerank", table["rerank"], columns),
-        _rank_row("hybrid", table["hybrid"], columns),
+        _pair_line("recall@5 hybrid OR vs AND", table["hybrid_or_vs_and"]),
+        _pair_line("recall@5 rerank OR vs AND", table["rerank_or_vs_and"]),
+        "method      recall@5  precision@5  MRR     nDCG@5",
+        _rank_row("rerank_or", table["rerank"], columns),
+        _rank_row("hybrid_or", table["hybrid"], columns),
+        _rank_row("rerank_and", table["and_rerank"], columns),
+        _rank_row("hybrid_and", table["and_hybrid"], columns),
         _rank_row("vector", table["vector"], columns),
         _rank_row("random", table["random"], columns),
     ]
@@ -327,15 +392,20 @@ def _render_rank(table: dict) -> list[str]:
 
 def _rank_row(name: str, metrics: dict, columns: tuple[str, ...]) -> str:
     cells = "  ".join(f"{metrics[column]:.4f}" for column in columns)
-    return f"{name:<10} {cells}"
+    return f"{name:<11} {cells}"
 
 
 def _group_header(table: dict) -> str:
     return f"{table['group']} n={table['n']} corpus_size={table['corpus_size']}"
 
 
-def _pair_line(label: str, counts: dict[str, int]) -> str:
-    return f"{label} wins={counts['wins']} losses={counts['losses']} ties={counts['ties']}"
+def _pair_line(label: str, counts: dict) -> str:
+    line = f"{label} wins={counts['wins']} losses={counts['losses']} ties={counts['ties']}"
+    if "OR vs AND" in label and (counts["wins"] or counts["losses"]):
+        wins = ",".join(counts["win_ids"]) or "-"
+        losses = ",".join(counts["loss_ids"]) or "-"
+        line += f" win_ids={wins} loss_ids={losses}"
+    return line
 
 
 def _render_flag(table: dict) -> list[str]:
@@ -344,8 +414,12 @@ def _render_flag(table: dict) -> list[str]:
         f"{_group_header(table)} metric={metric}",
         _pair_line(f"{metric} rerank vs hybrid", table["rerank_vs_hybrid"]),
         _pair_line(f"{metric} rerank vs random", table["rerank_vs_random"]),
-        f"rerank {table['rerank']:.4f}",
-        f"hybrid {table['hybrid']:.4f}",
+        _pair_line(f"{metric} hybrid OR vs AND", table["hybrid_or_vs_and"]),
+        _pair_line(f"{metric} rerank OR vs AND", table["rerank_or_vs_and"]),
+        f"rerank_or {table['rerank']:.4f}",
+        f"hybrid_or {table['hybrid']:.4f}",
+        f"rerank_and {table['and_rerank']:.4f}",
+        f"hybrid_and {table['and_hybrid']:.4f}",
         f"vector {table['vector']:.4f}",
         f"random {table['random']:.4f}",
     ]

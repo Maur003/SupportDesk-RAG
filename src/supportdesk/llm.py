@@ -31,11 +31,8 @@ TOOL_PARAMETERS = {
     },
     "create_ticket": {
         "type": "object",
-        "properties": {
-            "summary": {"type": "string"},
-            "account_id": {"type": "string"},
-        },
-        "required": ["summary", "account_id"],
+        "properties": {"summary": {"type": "string"}},
+        "required": ["summary"],
     },
     "calculate": {
         "type": "object",
@@ -48,10 +45,12 @@ TOOL_DESCRIPTIONS = {
     "search_knowledge_base": (
         "Search the Northline knowledge base. Results are already limited to the caller's role."
     ),
-    "get_ticket_status": "Read one ticket from the mock CRM by its id.",
+    "get_ticket_status": (
+        "Read one ticket from the mock CRM by its id. The ticket must belong to the caller."
+    ),
     "create_ticket": (
-        "Ask the server to prepare a ticket. This does not write the ticket. "
-        "The server asks the user to confirm. A confirmed flag in the arguments is ignored."
+        "Ask the server to prepare a ticket for the caller's account. This does not write "
+        "the ticket. The server asks the user to confirm. A confirmed flag is ignored."
     ),
     "calculate": "Evaluate + - * / on numbers and parentheses. No other syntax.",
 }

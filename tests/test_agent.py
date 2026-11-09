@@ -7,6 +7,7 @@ from tests.crm_harness import running_crm
 from supportdesk.agent import MAX_STEPS
 from supportdesk.auth import issue_token
 from supportdesk.config import get_settings
+from supportdesk.confirmations import ConfirmationStore
 from supportdesk.crm_client import CrmClient
 from supportdesk.crm_server import SEED_TICKET_ID
 from supportdesk.db import make_session_factory
@@ -118,7 +119,7 @@ def test_create_ticket_stops_until_the_user_confirms() -> None:
         assert confirmed.status_code == 200
         ticket = confirmed.json()
         assert ticket["id"] == "TCK-1002"
-        assert ticket["account_id"] == "ACCT-4402"
+        assert ticket["account_id"] == "ACCT-4401"
         assert ticket["id"] in crm_app.state.tickets
 
         again = client.post(
@@ -175,6 +176,72 @@ def test_calculate_tool_returns_the_value_and_rejects_calls() -> None:
     assert response.json()["answer"] == "14, and the other expression is not allowed."
     assert llm.seen[1][-1]["content"] == {"value": 14}
     assert llm.seen[2][-1]["content"] == {"error": "invalid expression"}
+
+
+def test_get_ticket_rejects_another_account() -> None:
+    llm = ScriptLLM(
+        [
+            ModelTurn("", ToolCall("get_ticket_status", {"ticket_id": SEED_TICKET_ID})),
+            ModelTurn("I cannot see that ticket.", None),
+        ]
+    )
+    with running_crm() as (base_url, _crm_app):
+        client = _ask_client(llm, base_url)
+        response = client.post(
+            "/ask",
+            headers=_bearer("customer", "ACCT-9999"),
+            json={"query": "status of TCK-1001"},
+        )
+    assert response.status_code == 200
+    assert llm.seen[1][-1]["content"] == {"error": "ticket not found"}
+    assert "North Mill" not in str(llm.seen)
+
+
+def test_confirmation_is_bound_to_sub_and_expires() -> None:
+    now = {"t": 1_000.0}
+    store = ConfirmationStore(clock=lambda: now["t"])
+    llm = ScriptLLM(
+        [
+            ModelTurn(
+                "",
+                ToolCall(
+                    "create_ticket",
+                    {"summary": "Porch line has no dial tone", "account_id": "ACCT-9999"},
+                ),
+            )
+        ]
+    )
+    with running_crm() as (base_url, crm_app):
+        client = TestClient(
+            create_app(
+                llm=llm,
+                crm=CrmClient(base_url, "test-key"),
+                embedder=_Embedder(),
+                reranker=_Reranker(),
+                confirmations=store,
+                prefetch_retrieval=False,
+            )
+        )
+        asked = client.post(
+            "/ask",
+            headers=_bearer("customer", "ACCT-4401"),
+            json={"query": "Open a ticket for the porch line."},
+        )
+        body = asked.json()
+        assert body["account_id"] == "ACCT-4401"
+        confirmation_id = body["confirmation_id"]
+        other = client.post(
+            f"/confirmations/{confirmation_id}",
+            headers=_bearer("customer", "ACCT-9999"),
+        )
+        assert other.status_code == 403
+        now["t"] += 300
+        expired = client.post(
+            f"/confirmations/{confirmation_id}",
+            headers=_bearer("customer", "ACCT-4401"),
+        )
+        assert expired.status_code == 404
+        assert set(crm_app.state.tickets) == {SEED_TICKET_ID}
 
 
 def test_get_ticket_reads_the_crm_over_http() -> None:
@@ -298,8 +365,8 @@ def _ask_client(llm: ScriptLLM, base_url: str) -> TestClient:
     )
 
 
-def _bearer(role: str) -> dict[str, str]:
-    return {"Authorization": f"Bearer {issue_token(role, get_settings().jwt_secret)}"}
+def _bearer(role: str, sub: str = "ACCT-4401") -> dict[str, str]:
+    return {"Authorization": f"Bearer {issue_token(role, get_settings().jwt_secret, sub)}"}
 
 
 def _seed(db_session) -> None:

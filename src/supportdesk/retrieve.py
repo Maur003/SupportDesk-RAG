@@ -1,13 +1,14 @@
 """Vector search, keyword search, and reciprocal rank fusion.
 
 The access filter is SQL, not a Python post-filter. Keyword search uses the
-same `access_level = ANY(:allowed)` predicate as the vector query.
+same `access_level = ANY(:allowed)` predicate as the vector query. The ask
+path ORs the question's English lexemes. Eval also scores the AND form.
 """
 
 import time
 from dataclasses import dataclass
 
-from sqlalchemy import any_, bindparam, func, literal_column, select
+from sqlalchemy import String, any_, bindparam, cast, func, literal_column, select
 from sqlalchemy.dialects.postgresql import ARRAY
 from sqlalchemy.orm import Session
 
@@ -63,11 +64,23 @@ def search_chunks(
     return [(str(row.id), float(row.distance)) for row in rows]
 
 
-def keyword_statement(k: int):
-    """SQL for keyword search. The access predicate is part of the statement."""
+def keyword_statement(k: int, mode: str = "or"):
+    """SQL for keyword search. The access predicate is part of the statement.
 
+    `or` stems the question with `to_tsvector('english')` and joins those
+    lexemes with `|` inside `to_tsquery`. `and` keeps `websearch_to_tsquery`,
+    which ANDs the words left after English stop-words. Eval scores both.
+    The ask path uses `or`.
+    """
+
+    if mode not in {"or", "and"}:
+        raise ValueError("keyword mode must be or or and")
     query_param = bindparam("query", unique=False)
-    tsquery = func.websearch_to_tsquery(literal_column("'english'"), query_param)
+    english = literal_column("'english'")
+    if mode == "and":
+        tsquery = func.websearch_to_tsquery(english, query_param)
+    else:
+        tsquery = _or_tsquery(english, query_param)
     rank = func.ts_rank_cd(Chunk.search_vector, tsquery)
     allowed_param = bindparam("allowed", type_=ARRAY(access_level_enum))
     return (
@@ -85,18 +98,34 @@ def keyword_search(
     query: str,
     allowed: tuple[str, ...],
     k: int = CANDIDATE_K,
+    mode: str = "or",
 ) -> list[tuple[str, float]]:
     """Return up to k (chunk id, ts_rank_cd) pairs, highest rank first.
 
-    The query is the question text. `websearch_to_tsquery` ANDs the remaining
-    words after English stop-words are removed. Rank ties break on chunk id.
+    The query is the question text. Rank ties break on chunk id. `mode="or"`
+    matches any stemmed lexeme. `mode="and"` requires every remaining word.
     """
 
     if k < 1:
         raise ValueError("k must be positive")
-    statement = keyword_statement(k)
+    statement = keyword_statement(k, mode)
     rows = session.execute(statement, {"query": query, "allowed": list(allowed)}).all()
     return [(str(row.id), float(row.rank)) for row in rows]
+
+
+def _or_tsquery(english, query_param):
+    """`to_tsquery` whose terms are the English lexemes of the question, ORed.
+
+    `strip` drops token positions. A question with no lexemes becomes a query
+    that matches nothing, instead of raising inside `to_tsquery`.
+    """
+
+    stripped = cast(func.strip(func.to_tsvector(english, query_param)), String)
+    joined = func.replace(stripped, "' '", "' | '")
+    present = func.nullif(joined, "")
+    # A lexeme ANDed with its negation matches no row. to_tsquery rejects an empty string.
+    nothing = "'__nomatch__' & !'__nomatch__'"
+    return func.to_tsquery(english, func.coalesce(present, nothing))
 
 
 def fuse_rankings(rankings: list[list[str]], *, rrf_k: int = RRF_K) -> list[tuple[str, float]]:

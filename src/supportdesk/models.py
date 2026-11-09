@@ -122,6 +122,7 @@ class ResponseCache(Base):
     cache_key: Mapped[str] = mapped_column(String(64), nullable=False)
     access_scope: Mapped[str] = mapped_column(String, nullable=False)
     model: Mapped[str] = mapped_column(String, nullable=False)
+    corpus_version: Mapped[str] = mapped_column(String(64), nullable=False)
     query_text: Mapped[str] = mapped_column(Text, nullable=False)
     embedding: Mapped[list[float] | None] = mapped_column(
         VECTOR(BGE_SMALL_DIMENSIONS), nullable=True
