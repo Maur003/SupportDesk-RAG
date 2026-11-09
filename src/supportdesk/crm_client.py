@@ -11,7 +11,7 @@ from collections.abc import Callable
 
 import httpx
 
-RETRYABLE = frozenset({429, 500, 502, 503, 504})
+from supportdesk.breaker import RETRYABLE_STATUS, CircuitBreaker, retry_delay
 
 
 class CrmError(Exception):
@@ -32,11 +32,13 @@ class CrmClient:
         transport: httpx.BaseTransport | None = None,
         sleep: Callable[[float], None] = time.sleep,
         rng: Callable[[], float] = random.random,
+        breaker: CircuitBreaker | None = None,
     ) -> None:
         self._attempts = attempts
         self._backoff = backoff
         self._sleep = sleep
         self._rng = rng
+        self._breaker = breaker
         self._client = httpx.Client(
             base_url=base_url,
             timeout=timeout,
@@ -55,19 +57,40 @@ class CrmClient:
         return self._send("POST", "/tickets", json=body).json()
 
     def _send(self, method: str, path: str, json: dict | None = None) -> httpx.Response:
+        if self._breaker is not None and not self._breaker.allow():
+            raise CrmError(None, "circuit open")
         last_status: int | None = None
         last_body = ""
         for attempt in range(self._attempts):
             try:
                 response = self._client.request(method, path, json=json)
             except httpx.TimeoutException as exc:
+                self._fail()
                 raise CrmError(None, "timeout") from exc
-            if response.status_code in RETRYABLE and attempt + 1 < self._attempts:
+            if response.status_code in RETRYABLE_STATUS and attempt + 1 < self._attempts:
                 last_status = response.status_code
                 last_body = response.text
-                self._sleep(self._backoff * (2**attempt) * (0.5 + 0.5 * self._rng()))
+                self._sleep(retry_delay(self._backoff, attempt, self._rng))
                 continue
-            if response.status_code >= 400:
+            if response.status_code in RETRYABLE_STATUS:
+                self._fail()
                 raise CrmError(response.status_code, response.text)
+            if response.status_code >= 400:
+                self._end_trial()
+                raise CrmError(response.status_code, response.text)
+            self._succeed()
             return response
+        self._fail()
         raise CrmError(last_status, last_body)
+
+    def _succeed(self) -> None:
+        if self._breaker is not None:
+            self._breaker.record_success()
+
+    def _fail(self) -> None:
+        if self._breaker is not None:
+            self._breaker.record_failure()
+
+    def _end_trial(self) -> None:
+        if self._breaker is not None:
+            self._breaker.end_trial()

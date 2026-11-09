@@ -3,9 +3,17 @@
 `GeminiLLM` checks `client.models.list()` once before the first `generate_content`.
 Both the generator id and the judge id must be present. Automatic function calling
 is turned off, so a tool runs only when this process executes it.
+
+`GuardedLLM` retries 429 and 5xx with the same delay as the CRM client. A timeout
+is not retried. Those failures, and `LLMUnavailable`, open the circuit breaker.
 """
 
+import random
+import time
+from collections.abc import Callable
 from dataclasses import dataclass
+
+from supportdesk.breaker import RETRYABLE_STATUS, CircuitBreaker, retry_delay
 
 TOOL_PARAMETERS = {
     "search_knowledge_base": {
@@ -48,6 +56,10 @@ TOOL_DESCRIPTIONS = {
 
 class ModelError(Exception):
     pass
+
+
+class LLMUnavailable(Exception):
+    """The generator could not be called. The API returns citations instead of an answer."""
 
 
 @dataclass(frozen=True)
@@ -109,6 +121,68 @@ class GeminiLLM:
             joined = ", ".join(missing)
             raise ModelError(f"models.list() did not include {joined}")
         self._models_ok = True
+
+
+class GuardedLLM:
+    def __init__(
+        self,
+        inner: object,
+        breaker: CircuitBreaker,
+        *,
+        attempts: int = 3,
+        backoff: float = 0.2,
+        sleep: Callable[[float], None] = time.sleep,
+        rng: Callable[[], float] = random.random,
+    ) -> None:
+        self._inner = inner
+        self._breaker = breaker
+        self._attempts = attempts
+        self._backoff = backoff
+        self._sleep = sleep
+        self._rng = rng
+
+    def generate(self, messages: list[dict]) -> ModelTurn:
+        if not self._breaker.allow():
+            raise LLMUnavailable("circuit open")
+        last: Exception | None = None
+        for attempt in range(self._attempts):
+            try:
+                turn = self._inner.generate(messages)
+            except ModelError:
+                raise
+            except LLMUnavailable:
+                self._breaker.record_failure()
+                raise
+            except Exception as exc:
+                status = _status_code(exc)
+                if status in RETRYABLE_STATUS and attempt + 1 < self._attempts:
+                    last = exc
+                    self._sleep(retry_delay(self._backoff, attempt, self._rng))
+                    continue
+                if status in RETRYABLE_STATUS or _is_timeout(exc):
+                    self._breaker.record_failure()
+                    detail = "timeout" if _is_timeout(exc) else "unavailable"
+                    raise LLMUnavailable(detail) from exc
+                raise
+            else:
+                if not isinstance(turn, ModelTurn):
+                    raise TypeError("llm.generate must return a ModelTurn")
+                self._breaker.record_success()
+                return turn
+        self._breaker.record_failure()
+        raise LLMUnavailable("unavailable") from last
+
+
+def _status_code(exc: Exception) -> int | None:
+    for name in ("status_code", "code"):
+        value = getattr(exc, name, None)
+        if isinstance(value, int):
+            return value
+    return None
+
+
+def _is_timeout(exc: Exception) -> bool:
+    return isinstance(exc, TimeoutError) or exc.__class__.__name__.endswith("TimeoutException")
 
 
 def _declarations() -> list:

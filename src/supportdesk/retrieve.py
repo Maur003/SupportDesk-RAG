@@ -9,7 +9,7 @@ from sqlalchemy.dialects.postgresql import ARRAY
 from sqlalchemy.orm import Session
 
 from supportdesk.embed_text import embedding_input
-from supportdesk.embedder import BgeEmbedder
+from supportdesk.embedder import BgeEmbedder, EmbedderError
 from supportdesk.models import Chunk, access_level_enum
 
 RETRIEVAL_K = 5
@@ -178,6 +178,39 @@ def rerank_order(chunk_ids: list[str], logits: list[float], k: int) -> list[str]
         key=lambda item: (-item[1], item[0]),
     )
     return [chunk_id for chunk_id, _logit in ranked[:k]]
+
+
+def retrieve(
+    session: Session,
+    query: str,
+    embedder: object,
+    allowed: tuple[str, ...],
+    reranker: object,
+    *,
+    k: int = RETRIEVAL_K,
+    candidate_k: int = CANDIDATE_K,
+    rerank_enabled: bool = True,
+) -> list[str]:
+    """Search, or keyword-only when the embedder cannot encode the query.
+
+    The keyword fallback keeps `access_level = ANY(:allowed)` and does not call
+    the reranker. Its cutoff is `k`, the same window as a normal search.
+    """
+
+    try:
+        query_vector = embedder.embed_query(query)
+    except EmbedderError:
+        return [chunk_id for chunk_id, _rank in keyword_search(session, query, allowed, k)]
+    return search(
+        session,
+        query,
+        query_vector,
+        allowed,
+        reranker,
+        k=k,
+        candidate_k=candidate_k,
+        rerank_enabled=rerank_enabled,
+    )
 
 
 def search(

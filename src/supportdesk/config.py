@@ -48,6 +48,10 @@ class Settings(BaseSettings):
     crm_timeout_seconds: float = 2.0
     crm_retry_attempts: int = 3
     crm_retry_backoff_seconds: float = 0.2
+    llm_retry_attempts: int = 3
+    llm_retry_backoff_seconds: float = 0.2
+    circuit_failure_threshold: int = 3
+    circuit_reset_seconds: float = 30.0
 
     @model_validator(mode="after")
     def check_models_and_chunks(self) -> "Settings":
@@ -73,6 +77,14 @@ class Settings(BaseSettings):
             raise ValueError("crm_retry_attempts must be >= 1")
         if self.crm_retry_backoff_seconds < 0:
             raise ValueError("crm_retry_backoff_seconds must be >= 0")
+        if self.llm_retry_attempts < 1:
+            raise ValueError("llm_retry_attempts must be >= 1")
+        if self.llm_retry_backoff_seconds < 0:
+            raise ValueError("llm_retry_backoff_seconds must be >= 0")
+        if self.circuit_failure_threshold < 1:
+            raise ValueError("circuit_failure_threshold must be >= 1")
+        if self.circuit_reset_seconds < 0:
+            raise ValueError("circuit_reset_seconds must be >= 0")
         _require_commit(self.embedding_revision, "embedding_revision")
         _require_commit(self.rerank_revision, "rerank_revision")
         return self

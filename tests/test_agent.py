@@ -215,7 +215,7 @@ def test_a_failed_crm_write_keeps_the_confirmation() -> None:
             )
         ]
     )
-    client = TestClient(create_app(llm=llm, crm=crm))
+    client = TestClient(create_app(llm=llm, crm=crm, prefetch_retrieval=False))
     asked = client.post(
         "/ask",
         headers=_bearer("customer"),
@@ -280,7 +280,15 @@ def _client(db_session, llm: ScriptLLM) -> tuple[TestClient, object]:
 
 def _ask_client(llm: ScriptLLM, base_url: str) -> TestClient:
     crm = CrmClient(base_url, "test-key")
-    return TestClient(create_app(llm=llm, crm=crm, embedder=_Embedder(), reranker=_Reranker()))
+    return TestClient(
+        create_app(
+            llm=llm,
+            crm=crm,
+            embedder=_Embedder(),
+            reranker=_Reranker(),
+            prefetch_retrieval=False,
+        )
+    )
 
 
 def _bearer(role: str) -> dict[str, str]:

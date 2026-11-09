@@ -10,6 +10,10 @@ from supportdesk.config import BGE_SMALL_DIMENSIONS
 QUERY_INSTRUCTION = "Represent this sentence for searching relevant passages: "
 
 
+class EmbedderError(Exception):
+    """The embedding model could not encode a query. Retrieval can fall back to keywords."""
+
+
 class BgeEmbedder:
     def __init__(self, model_name: str, revision: str) -> None:
         from sentence_transformers import SentenceTransformer
@@ -36,13 +40,18 @@ class BgeEmbedder:
         return rows
 
     def embed_query(self, text: str) -> list[float]:
-        vector = self._model.encode_query(
-            QUERY_INSTRUCTION + text,
-            prompt="",
-            normalize_embeddings=True,
-            show_progress_bar=False,
-            convert_to_numpy=True,
-        )
+        try:
+            vector = self._model.encode_query(
+                QUERY_INSTRUCTION + text,
+                prompt="",
+                normalize_embeddings=True,
+                show_progress_bar=False,
+                convert_to_numpy=True,
+            )
+        except EmbedderError:
+            raise
+        except Exception as exc:
+            raise EmbedderError("embedder unavailable") from exc
         row = vector.tolist()
         _check_dimensions([row])
         return row

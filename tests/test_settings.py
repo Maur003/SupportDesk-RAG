@@ -52,6 +52,10 @@ def test_crm_retry_settings() -> None:
     assert settings.crm_base_url == "http://localhost:8001"
     assert settings.crm_retry_attempts == 3
     assert settings.crm_timeout_seconds == 2.0
+    assert settings.circuit_failure_threshold == 3
+    assert settings.llm_retry_attempts == 3
+    with pytest.raises(ValidationError):
+        Settings(circuit_failure_threshold=0)
     with pytest.raises(ValidationError):
         Settings(crm_api_key="  ")
     with pytest.raises(ValidationError):

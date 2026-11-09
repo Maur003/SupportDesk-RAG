@@ -5,17 +5,18 @@ from sqlalchemy import select
 from sqlalchemy.orm import Session, sessionmaker
 
 from supportdesk.access import allowed_levels
-from supportdesk.agent import run_agent
+from supportdesk.agent import REFUSAL, run_agent
 from supportdesk.auth import TokenError, read_role
+from supportdesk.breaker import CircuitBreaker
 from supportdesk.config import get_settings
 from supportdesk.confirmations import ConfirmationStore
 from supportdesk.crm_client import CrmClient, CrmError
 from supportdesk.db import make_engine, make_session_factory
 from supportdesk.embedder import BgeEmbedder
-from supportdesk.llm import GeminiLLM
+from supportdesk.llm import GeminiLLM, GuardedLLM
 from supportdesk.models import Chunk
 from supportdesk.reranker import MiniLMReranker
-from supportdesk.retrieve import search
+from supportdesk.retrieve import retrieve
 
 _bearer = HTTPBearer(auto_error=False)
 
@@ -51,6 +52,7 @@ class AskResponse(BaseModel):
     confirmation_id: str | None = None
     summary: str | None = None
     account_id: str | None = None
+    citations: list[Hit] = Field(default_factory=list)
 
 
 def create_app(
@@ -61,6 +63,9 @@ def create_app(
     llm: object | None = None,
     crm: CrmClient | None = None,
     confirmations: ConfirmationStore | None = None,
+    llm_breaker: CircuitBreaker | None = None,
+    crm_breaker: CircuitBreaker | None = None,
+    prefetch_retrieval: bool = True,
 ) -> FastAPI:
     app = FastAPI(
         title="SupportDesk RAG",
@@ -70,9 +75,19 @@ def create_app(
     app.state.session_factory = session_factory
     app.state.embedder = embedder
     app.state.reranker = reranker
+    settings = get_settings()
     app.state.llm = llm
     app.state.crm = crm
     app.state.confirmations = confirmations
+    app.state.prefetch_retrieval = prefetch_retrieval
+    app.state.llm_breaker = llm_breaker or CircuitBreaker(
+        settings.circuit_failure_threshold,
+        settings.circuit_reset_seconds,
+    )
+    app.state.crm_breaker = crm_breaker or CircuitBreaker(
+        settings.circuit_failure_threshold,
+        settings.circuit_reset_seconds,
+    )
 
     @app.get("/health")
     def health() -> dict[str, str]:
@@ -84,21 +99,8 @@ def create_app(
         credentials: HTTPAuthorizationCredentials | None = Depends(_bearer),
     ) -> SearchResponse:
         role = _role_from_header(credentials)
-        settings = get_settings()
-        factory = _session_factory(app)
-        query_embedder = _embedder(app)
-        query_reranker = _reranker(app)
-        with factory() as session:
-            ids = search(
-                session,
-                body.query,
-                query_embedder.embed_query(body.query),
-                allowed_levels(role),
-                query_reranker,
-                rerank_enabled=settings.rerank_enabled,
-            )
-            hits = _hits(session, ids)
-        return SearchResponse(role=role, hits=hits)
+        hits = _search_hits(app, role, body.query)
+        return SearchResponse(role=role, hits=[Hit(**hit) for hit in hits])
 
     @app.post("/ask")
     def ask_route(
@@ -106,13 +108,18 @@ def create_app(
         credentials: HTTPAuthorizationCredentials | None = Depends(_bearer),
     ) -> AskResponse:
         role = _role_from_header(credentials)
+        llm = _llm(app)
+        citations = _search_hits(app, role, body.query) if app.state.prefetch_retrieval else []
+        if app.state.prefetch_retrieval and not citations:
+            return AskResponse(role=role, status="refused", steps=0, answer=REFUSAL)
         result = run_agent(
             body.query,
             role,
-            llm=_llm(app),
+            llm=llm,
             search_fn=lambda query: _search_hits(app, role, query),
             crm=_crm(app),
             confirmations=_confirmations(app),
+            citations=citations,
         )
         return AskResponse(
             role=role,
@@ -122,6 +129,7 @@ def create_app(
             confirmation_id=result.confirmation_id,
             summary=result.summary,
             account_id=result.account_id,
+            citations=[Hit(**hit) for hit in result.citations],
         )
 
     @app.post("/confirmations/{confirmation_id}")
@@ -142,6 +150,10 @@ def create_app(
         try:
             ticket = _crm(app).create_ticket(item["summary"], item["account_id"])
         except CrmError as exc:
+            if str(exc) == "circuit open":
+                raise HTTPException(status_code=503, detail="crm unavailable") from exc
+            if str(exc) == "timeout":
+                raise HTTPException(status_code=504, detail="crm timeout") from exc
             raise HTTPException(status_code=502, detail="crm create failed") from exc
         store.discard(confirmation_id)
         return ticket
@@ -184,11 +196,16 @@ def _reranker(app: FastAPI) -> MiniLMReranker:
     return reranker
 
 
-def _llm(app: FastAPI) -> object:
+def _llm(app: FastAPI) -> GuardedLLM:
     llm = app.state.llm
-    if llm is not None:
-        return llm
     settings = get_settings()
+    if llm is not None:
+        return GuardedLLM(
+            llm,
+            app.state.llm_breaker,
+            attempts=settings.llm_retry_attempts,
+            backoff=settings.llm_retry_backoff_seconds,
+        )
     if not settings.gemini_api_key.strip():
         raise HTTPException(status_code=503, detail="generator is not configured")
     llm = GeminiLLM(
@@ -198,7 +215,12 @@ def _llm(app: FastAPI) -> object:
         temperature=settings.generator_temperature,
     )
     app.state.llm = llm
-    return llm
+    return GuardedLLM(
+        llm,
+        app.state.llm_breaker,
+        attempts=settings.llm_retry_attempts,
+        backoff=settings.llm_retry_backoff_seconds,
+    )
 
 
 def _crm(app: FastAPI) -> CrmClient:
@@ -211,6 +233,7 @@ def _crm(app: FastAPI) -> CrmClient:
             timeout=settings.crm_timeout_seconds,
             attempts=settings.crm_retry_attempts,
             backoff=settings.crm_retry_backoff_seconds,
+            breaker=app.state.crm_breaker,
         )
         app.state.crm = crm
     return crm
@@ -228,10 +251,10 @@ def _search_hits(app: FastAPI, role: str, query: str) -> list[dict[str, str]]:
     settings = get_settings()
     factory = _session_factory(app)
     with factory() as session:
-        ids = search(
+        ids = retrieve(
             session,
             query,
-            _embedder(app).embed_query(query),
+            _embedder(app),
             allowed_levels(role),
             _reranker(app),
             rerank_enabled=settings.rerank_enabled,

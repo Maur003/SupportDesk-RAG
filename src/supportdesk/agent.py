@@ -4,13 +4,15 @@
 from the user, not another model call, performs the CRM write.
 """
 
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 
 from supportdesk.arithmetic import calculate
 from supportdesk.crm_client import CrmClient, CrmError
-from supportdesk.llm import TOOL_DESCRIPTIONS, ModelTurn
+from supportdesk.llm import TOOL_DESCRIPTIONS, LLMUnavailable, ModelTurn
 
 MAX_STEPS = 5
+REFUSAL = "I don't know"
+UNAVAILABLE = "No answer was generated. The model is unavailable."
 
 
 @dataclass(frozen=True)
@@ -21,6 +23,7 @@ class AgentResult:
     confirmation_id: str | None = None
     summary: str | None = None
     account_id: str | None = None
+    citations: list[dict[str, str]] = field(default_factory=list)
 
 
 def run_agent(
@@ -31,10 +34,15 @@ def run_agent(
     search_fn,
     crm: CrmClient,
     confirmations: object,
+    citations: list[dict[str, str]] | None = None,
 ) -> AgentResult:
+    held = list(citations or [])
     messages: list[dict] = [{"role": "user", "text": query}]
     for step in range(1, MAX_STEPS + 1):
-        turn = llm.generate(messages)
+        try:
+            turn = llm.generate(messages)
+        except LLMUnavailable:
+            return AgentResult(status="unavailable", steps=step, answer=UNAVAILABLE, citations=held)
         if not isinstance(turn, ModelTurn):
             raise TypeError("llm.generate must return a ModelTurn")
         if turn.tool_call is None:
@@ -57,6 +65,8 @@ def run_agent(
             result = {"error": "summary and account_id are required"}
         else:
             result = _execute(call.name, call.arguments, search_fn=search_fn, crm=crm)
+        if result.get("hits") == []:
+            return AgentResult(status="refused", steps=step, answer=REFUSAL)
         messages.append({"role": "model", "text": turn.text, "tool_call": call})
         messages.append(
             {
@@ -104,6 +114,8 @@ def _text_arg(arguments: dict, key: str) -> str:
 
 
 def _crm_error(exc: CrmError) -> str:
+    if str(exc) == "circuit open":
+        return "crm circuit open"
     if exc.status_code is None:
         return "crm timeout"
     return f"crm status {exc.status_code}"
