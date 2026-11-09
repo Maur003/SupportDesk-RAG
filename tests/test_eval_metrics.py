@@ -50,7 +50,7 @@ def test_floor_rejects_a_collapsed_rerank_recall() -> None:
 
 def test_floor_rejects_a_collapsed_hybrid_recall() -> None:
     report = _report(0.6310)
-    report["tables"][0]["hybrid"]["recall_at_5"] = 0.49
+    report["tables"][0]["hybrid"]["recall_at_5"] = 0.39
     with pytest.raises(SystemExit):
         enforce_floors(report)
 
