@@ -1,10 +1,13 @@
-.PHONY: deps-torch deps install lint format-check test migrate ingest manifest up down
+.PHONY: deps-torch deps deps-dev install lint format-check test migrate ingest manifest up down
 
 deps-torch:
 	python -m pip install -r requirements-torch.txt
 
 deps:
 	python -m pip install -r requirements.txt
+
+deps-dev:
+	python -m pip install -r requirements-dev.txt
 
 install:
 	python -m pip install -e . --no-deps

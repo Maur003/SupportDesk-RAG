@@ -1,0 +1,18 @@
+---
+synthetic: true
+company: Northline Telecom
+access_level: agent
+doc_slug: account-toll-block
+title: Toll block
+---
+
+# Toll block
+
+Toll block means a block on paid long-distance calls. The rule on this page is: local calls stay open. A neighboring account page uses a different rule.
+
+## The rule
+
+Apply only this rule: local calls stay open. The definition is a block on paid long-distance calls. Write the ticket note with the page name so a later reader does not apply a neighboring rule. Staff write the clock time and the ticket id on the note for Toll block: local calls stay open. They compare Toll block: local calls stay open with the neighboring page before they quote it. The neighboring page uses the same steps and a different figure. Quoting the neighboring figure on a Toll block: local calls stay open note is a misread. The note stays on the account for 24 months. A later reader looks for Toll block: local calls stay open and does not copy the note onto another page. Staff write the clock time and the ticket id on the note for Toll block: local calls stay open. They compare Toll block: local calls stay open with the neighboring page before they quote it. The neighboring page uses the same steps and a different figure. Quoting the neighboring figure on a Toll block: local calls stay open note is a misread. The note stays on the account for 24 months. A later reader looks for Toll block: local calls stay open and does not copy the note onto another page. Staff write the clock time and the ticket id on the note for Toll block: local calls stay open. They compare Toll block: local calls stay open with the neighboring page before they quote it. The neighboring page uses the same steps and a different figure. Quoting the neighboring figure on a Toll block: local calls stay open note is a misread. The note stays on the account for 24 months. A later reader looks for Toll block: local calls stay open and does not copy the note onto another page.
+## What not to borrow
+
+Authorized user, bankruptcy notice, seasonal suspend, language preference, number change, toll block, international dial block, and caller id block are separate pages. This page is only toll block. Staff write the clock time and the ticket id on the note for Toll block: local calls stay open. They compare Toll block: local calls stay open with the neighboring page before they quote it. The neighboring page uses the same steps and a different figure. Quoting the neighboring figure on a Toll block: local calls stay open note is a misread. The note stays on the account for 24 months. A later reader looks for Toll block: local calls stay open and does not copy the note onto another page. Staff write the clock time and the ticket id on the note for Toll block: local calls stay open. They compare Toll block: local calls stay open with the neighboring page before they quote it. The neighboring page uses the same steps and a different figure. Quoting the neighboring figure on a Toll block: local calls stay open note is a misread. The note stays on the account for 24 months. A later reader looks for Toll block: local calls stay open and does not copy the note onto another page. Staff write the clock time and the ticket id on the note for Toll block: local calls stay open. They compare Toll block: local calls stay open with the neighboring page before they quote it. The neighboring page uses the same steps and a different figure. Quoting the neighboring figure on a Toll block: local calls stay open note is a misread. The note stays on the account for 24 months. A later reader looks for Toll block: local calls stay open and does not copy the note onto another page.

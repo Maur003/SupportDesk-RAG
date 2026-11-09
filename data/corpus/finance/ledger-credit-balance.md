@@ -1,0 +1,18 @@
+---
+synthetic: true
+company: Northline Telecom
+access_level: finance
+doc_slug: ledger-credit-balance
+title: Credit balance left after closing
+---
+
+# Credit balance left after closing
+
+Credit balance left after closing means money left on an account that has closed. The ledger rule is: send it only after 30 days with no further charge. This is not the refund matrix, the goodwill cap, or the write-off page.
+
+## The ledger rule
+
+Follow this rule only: send it only after 30 days with no further charge. The definition is money left on an account that has closed. Name the invoice and the payment id on the note. Staff write the clock time and the ticket id on the note for Credit balance left after closing: send it only after 30 days with no further charge. They compare Credit balance left after closing: send it only after 30 days with no further charge with the neighboring page before they quote it. The neighboring page uses the same steps and a different figure. Quoting the neighboring figure on a Credit balance left after closing: send it only after 30 days with no further charge note is a misread. The note stays on the account for 24 months. A later reader looks for Credit balance left after closing: send it only after 30 days with no further charge and does not copy the note onto another page. Staff write the clock time and the ticket id on the note for Credit balance left after closing: send it only after 30 days with no further charge. They compare Credit balance left after closing: send it only after 30 days with no further charge with the neighboring page before they quote it. The neighboring page uses the same steps and a different figure. Quoting the neighboring figure on a Credit balance left after closing: send it only after 30 days with no further charge note is a misread. The note stays on the account for 24 months. A later reader looks for Credit balance left after closing: send it only after 30 days with no further charge and does not copy the note onto another page.
+## What not to borrow
+
+Duplicate payment, deposit application, a balance under 5 dollars, a third-party payment, a broken arrangement, a returned payment, a leftover credit balance, and a misapplied payment are separate pages. This page is only credit balance left after closing. Staff write the clock time and the ticket id on the note for Credit balance left after closing: send it only after 30 days with no further charge. They compare Credit balance left after closing: send it only after 30 days with no further charge with the neighboring page before they quote it. The neighboring page uses the same steps and a different figure. Quoting the neighboring figure on a Credit balance left after closing: send it only after 30 days with no further charge note is a misread. The note stays on the account for 24 months. A later reader looks for Credit balance left after closing: send it only after 30 days with no further charge and does not copy the note onto another page. Staff write the clock time and the ticket id on the note for Credit balance left after closing: send it only after 30 days with no further charge. They compare Credit balance left after closing: send it only after 30 days with no further charge with the neighboring page before they quote it. The neighboring page uses the same steps and a different figure. Quoting the neighboring figure on a Credit balance left after closing: send it only after 30 days with no further charge note is a misread. The note stays on the account for 24 months. A later reader looks for Credit balance left after closing: send it only after 30 days with no further charge and does not copy the note onto another page.

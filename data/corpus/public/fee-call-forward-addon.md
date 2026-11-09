@@ -1,0 +1,18 @@
+---
+synthetic: true
+company: Northline Telecom
+access_level: public
+doc_slug: fee-call-forward-addon
+title: Call forward add-on
+---
+
+# Call forward add-on
+
+The call forward add-on is 4 dollars. This page states the charge a household sees. It does not state who may waive it.
+
+## What the household is billed
+
+The billed figure is 4 dollars. A neighboring fee page uses a different figure and a different name. Do not subtract this figure from a plan price. It is its own line. Staff write the clock time and the ticket id on the note for Call forward add-on at 4 dollars. They compare Call forward add-on at 4 dollars with the neighboring page before they quote it. The neighboring page uses the same steps and a different figure. Quoting the neighboring figure on a Call forward add-on at 4 dollars note is a misread. The note stays on the account for 24 months. A later reader looks for Call forward add-on at 4 dollars and does not copy the note onto another page. Staff write the clock time and the ticket id on the note for Call forward add-on at 4 dollars. They compare Call forward add-on at 4 dollars with the neighboring page before they quote it. The neighboring page uses the same steps and a different figure. Quoting the neighboring figure on a Call forward add-on at 4 dollars note is a misread. The note stays on the account for 24 months. A later reader looks for Call forward add-on at 4 dollars and does not copy the note onto another page. Staff write the clock time and the ticket id on the note for Call forward add-on at 4 dollars. They compare Call forward add-on at 4 dollars with the neighboring page before they quote it. The neighboring page uses the same steps and a different figure. Quoting the neighboring figure on a Call forward add-on at 4 dollars note is a misread. The note stays on the account for 24 months. A later reader looks for Call forward add-on at 4 dollars and does not copy the note onto another page.
+## What this page does not decide
+
+Frontline staff can remove it and cannot prorate it. Waiver rules are on the finance page for call forward add-on. A household who wants a waiver opens a billing ticket. Staff write the clock time and the ticket id on the note for Call forward add-on at 4 dollars. They compare Call forward add-on at 4 dollars with the neighboring page before they quote it. The neighboring page uses the same steps and a different figure. Quoting the neighboring figure on a Call forward add-on at 4 dollars note is a misread. The note stays on the account for 24 months. A later reader looks for Call forward add-on at 4 dollars and does not copy the note onto another page. Staff write the clock time and the ticket id on the note for Call forward add-on at 4 dollars. They compare Call forward add-on at 4 dollars with the neighboring page before they quote it. The neighboring page uses the same steps and a different figure. Quoting the neighboring figure on a Call forward add-on at 4 dollars note is a misread. The note stays on the account for 24 months. A later reader looks for Call forward add-on at 4 dollars and does not copy the note onto another page. Staff write the clock time and the ticket id on the note for Call forward add-on at 4 dollars. They compare Call forward add-on at 4 dollars with the neighboring page before they quote it. The neighboring page uses the same steps and a different figure. Quoting the neighboring figure on a Call forward add-on at 4 dollars note is a misread. The note stays on the account for 24 months. A later reader looks for Call forward add-on at 4 dollars and does not copy the note onto another page.

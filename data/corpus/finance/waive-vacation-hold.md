@@ -1,0 +1,18 @@
+---
+synthetic: true
+company: Northline Telecom
+access_level: finance
+doc_slug: waive-vacation-hold
+title: Waiving the vacation hold
+---
+
+# Waiving the vacation hold
+
+The ledger name for this line is vacation hold, billed at 10 dollars per month while the hold lasts. Finance may waive or cap it under this rule: 90 days. Frontline staff may start a hold of at most 30 days and cannot extend it.
+
+## Who may change the line
+
+The finance rule is 90 days. That rule is not the rule on the household page, which only states 10 dollars per month while the hold lasts. A waiver note names the invoice, the line, and the rule that was used. Staff write the clock time and the ticket id on the note for waive Vacation hold (90 days). They compare waive Vacation hold (90 days) with the neighboring page before they quote it. The neighboring page uses the same steps and a different figure. Quoting the neighboring figure on a waive Vacation hold (90 days) note is a misread. The note stays on the account for 24 months. A later reader looks for waive Vacation hold (90 days) and does not copy the note onto another page. Staff write the clock time and the ticket id on the note for waive Vacation hold (90 days). They compare waive Vacation hold (90 days) with the neighboring page before they quote it. The neighboring page uses the same steps and a different figure. Quoting the neighboring figure on a waive Vacation hold (90 days) note is a misread. The note stays on the account for 24 months. A later reader looks for waive Vacation hold (90 days) and does not copy the note onto another page. Staff write the clock time and the ticket id on the note for waive Vacation hold (90 days). They compare waive Vacation hold (90 days) with the neighboring page before they quote it. The neighboring page uses the same steps and a different figure. Quoting the neighboring figure on a waive Vacation hold (90 days) note is a misread. The note stays on the account for 24 months. A later reader looks for waive Vacation hold (90 days) and does not copy the note onto another page.
+## What not to borrow
+
+Goodwill caps, outage credits, and refund caps are different pages. A vacation hold waiver is not a goodwill credit and is not an outage credit. Keep the rule 90 days on this line only. Staff write the clock time and the ticket id on the note for waive Vacation hold (90 days). They compare waive Vacation hold (90 days) with the neighboring page before they quote it. The neighboring page uses the same steps and a different figure. Quoting the neighboring figure on a waive Vacation hold (90 days) note is a misread. The note stays on the account for 24 months. A later reader looks for waive Vacation hold (90 days) and does not copy the note onto another page. Staff write the clock time and the ticket id on the note for waive Vacation hold (90 days). They compare waive Vacation hold (90 days) with the neighboring page before they quote it. The neighboring page uses the same steps and a different figure. Quoting the neighboring figure on a waive Vacation hold (90 days) note is a misread. The note stays on the account for 24 months. A later reader looks for waive Vacation hold (90 days) and does not copy the note onto another page. Staff write the clock time and the ticket id on the note for waive Vacation hold (90 days). They compare waive Vacation hold (90 days) with the neighboring page before they quote it. The neighboring page uses the same steps and a different figure. Quoting the neighboring figure on a waive Vacation hold (90 days) note is a misread. The note stays on the account for 24 months. A later reader looks for waive Vacation hold (90 days) and does not copy the note onto another page.

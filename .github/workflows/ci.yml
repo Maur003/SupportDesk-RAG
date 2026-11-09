@@ -28,8 +28,17 @@ jobs:
       - uses: actions/setup-python@v5
         with:
           python-version: "3.13"
+          cache: pip
+          cache-dependency-path: |
+            requirements-torch.txt
+            requirements.txt
+            requirements-dev.txt
+      - uses: actions/cache@v4
+        with:
+          path: ~/.cache/huggingface
+          key: huggingface-${{ hashFiles('src/supportdesk/config.py') }}
       - run: make deps-torch
-      - run: make deps
+      - run: make deps-dev
       - run: make install
       - run: make lint
       - run: make format-check

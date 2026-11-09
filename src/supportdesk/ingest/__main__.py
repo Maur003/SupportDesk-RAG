@@ -12,7 +12,7 @@ from supportdesk.ingest.tokenize import HuggingFaceCodec
 def main() -> None:
     settings = get_settings()
     documents = load_corpus(Path(settings.corpus_dir))
-    codec = HuggingFaceCodec(settings.embedding_model)
+    codec = HuggingFaceCodec(settings.embedding_model, settings.embedding_revision)
     prepared = prepare_documents(
         documents,
         codec=codec,

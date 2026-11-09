@@ -1,4 +1,6 @@
 import json
+import re
+from collections import Counter
 from pathlib import Path
 
 from supportdesk.access import allowed_levels
@@ -7,6 +9,56 @@ from supportdesk.ingest.loaders import load_corpus
 from supportdesk.ingest.prepare import prepare_documents
 from supportdesk.ingest.tokenize import HuggingFaceCodec
 from supportdesk.manifest import MANIFEST_PATH, build_manifest_payload
+
+# Function words. The overlap check is about content words shared with the chunk.
+_STOP = {
+    "about",
+    "above",
+    "after",
+    "again",
+    "also",
+    "and",
+    "are",
+    "because",
+    "been",
+    "before",
+    "being",
+    "does",
+    "during",
+    "each",
+    "from",
+    "have",
+    "into",
+    "must",
+    "once",
+    "only",
+    "onto",
+    "over",
+    "past",
+    "rather",
+    "than",
+    "that",
+    "the",
+    "their",
+    "them",
+    "then",
+    "there",
+    "they",
+    "this",
+    "under",
+    "upon",
+    "what",
+    "when",
+    "where",
+    "which",
+    "while",
+    "who",
+    "whom",
+    "with",
+    "without",
+    "would",
+    "your",
+}
 
 GOLD_PATH = Path("data/gold/questions.json")
 
@@ -21,7 +73,7 @@ def _chunks():
         embedding_dimensions=384,
     )
     documents = load_corpus(Path(settings.corpus_dir))
-    codec = HuggingFaceCodec(settings.embedding_model)
+    codec = HuggingFaceCodec(settings.embedding_model, settings.embedding_revision)
     prepared = prepare_documents(
         documents,
         codec=codec,
@@ -45,6 +97,7 @@ def test_manifest_matches_a_fresh_chunking() -> None:
     fresh = build_manifest_payload(
         Path(settings.corpus_dir),
         settings.embedding_model,
+        settings.embedding_revision,
         settings.chunk_token_budget,
         settings.chunk_overlap_tokens,
     )
@@ -61,13 +114,17 @@ def test_gold_set_shape_and_spot_check() -> None:
     for question in questions:
         by_author.setdefault((question["author"], question["type"]), []).append(question)
     assert len(by_author[("user", "answerable")]) == 10
-    assert len(by_author[("llm", "answerable")]) == 20
+    assert len(by_author[("llm", "answerable")]) == 42
     assert len(by_author[("llm", "unanswerable")]) == 5
     assert len(by_author[("llm", "permission_trap")]) == 5
     assert gold["provenance"]["answerable_author_reserved"] == 10
-    assert gold["provenance"]["answerable_llm_drafted"] == 20
+    assert gold["provenance"]["answerable_llm_drafted"] == 42
+    assert gold["provenance"]["answerable_llm_drafted_paraphrase"] == 22
 
     chunks = _chunks()
+    assert len(chunks) >= 250
+    roles: Counter[str] = Counter()
+    paraphrases = 0
     blob = "\n".join(heading + "\n" + text for _, heading, text in chunks.values()).lower()
     multi = 0
     later = 0
@@ -84,6 +141,15 @@ def test_gold_set_shape_and_spot_check() -> None:
                 assert term.lower() not in blob
             continue
         assert supports
+        if question.get("wording") == "paraphrase":
+            paraphrases += 1
+            chunk_text = "\n".join(chunks[support["chunk_id"]][2] for support in supports)
+            overlap = _content_words(question["question"]) & _content_words(chunk_text)
+            question_words = _content_words(question["question"])
+            assert overlap == set(), overlap
+            assert question_words
+        if question["author"] == "llm" and question["type"] == "answerable":
+            roles[question["user_role"]] += 1
         if len(supports) > 1:
             multi += 1
         for support in supports:
@@ -99,3 +165,15 @@ def test_gold_set_shape_and_spot_check() -> None:
                 assert access_level not in allowed_levels(question["user_role"])
     assert multi >= 1
     assert later >= 1
+    assert paraphrases == 22
+    assert roles["customer"] >= 8
+    assert roles["agent"] >= 8
+    assert roles["finance"] >= 8
+
+
+def _content_words(text: str) -> set[str]:
+    return {
+        word
+        for word in re.findall(r"[a-z0-9]+", text.lower())
+        if len(word) > 3 and word not in _STOP and not word.isdigit()
+    }

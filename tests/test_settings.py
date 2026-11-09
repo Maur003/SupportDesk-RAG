@@ -1,7 +1,7 @@
 import pytest
 from pydantic import ValidationError
 
-from supportdesk.config import BGE_SMALL_DIMENSIONS, Settings
+from supportdesk.config import BGE_SMALL_DIMENSIONS, EMBEDDING_REVISION, Settings
 
 
 def test_judge_model_must_differ_from_generator() -> None:
@@ -27,3 +27,9 @@ def test_default_models_and_chunk_overlap() -> None:
     assert settings.judge_temperature == 0
     assert settings.embedding_dimensions == BGE_SMALL_DIMENSIONS
     assert settings.chunk_overlap_tokens / settings.chunk_token_budget == 0.15
+    assert settings.embedding_revision == EMBEDDING_REVISION
+
+
+def test_embedding_revision_must_be_a_commit() -> None:
+    with pytest.raises(ValidationError):
+        Settings(embedding_revision="main")

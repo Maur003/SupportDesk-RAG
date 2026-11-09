@@ -4,7 +4,9 @@ from pydantic import model_validator
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
 # Model card: BAAI/bge-small-en-v1.5 outputs 384 dimensions and accepts 512 tokens.
+# Revision is the Hub commit already in the local tokenizer cache. "main" is not allowed.
 BGE_SMALL_DIMENSIONS = 384
+EMBEDDING_REVISION = "5c38ec7c405ec4b44b94cc5a9bb96e735b38267a"
 
 
 class Settings(BaseSettings):
@@ -24,6 +26,7 @@ class Settings(BaseSettings):
     database_url: str = "postgresql+psycopg://supportdesk:supportdesk@localhost:5433/supportdesk"
     corpus_dir: str = "data/corpus"
     embedding_model: str = "BAAI/bge-small-en-v1.5"
+    embedding_revision: str = EMBEDDING_REVISION
     embedding_dimensions: int = BGE_SMALL_DIMENSIONS
     chunk_token_budget: int = 400
     chunk_overlap_tokens: int = 60
@@ -45,6 +48,12 @@ class Settings(BaseSettings):
         if self.embedding_dimensions != BGE_SMALL_DIMENSIONS:
             raise ValueError(
                 "embedding_dimensions must stay 384 until a migration rebuilds the vector column"
+            )
+        if len(self.embedding_revision) != 40 or any(
+            char not in "0123456789abcdef" for char in self.embedding_revision
+        ):
+            raise ValueError(
+                "embedding_revision must be a 40-character commit id, not a branch name"
             )
         return self
 

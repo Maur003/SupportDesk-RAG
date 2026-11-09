@@ -9,9 +9,15 @@ from supportdesk.ingest.tokenize import HuggingFaceCodec
 MANIFEST_PATH = Path("data/gold/chunk_manifest.json")
 
 
-def build_manifest_payload(corpus_dir: Path, model_name: str, budget: int, overlap: int) -> dict:
+def build_manifest_payload(
+    corpus_dir: Path,
+    model_name: str,
+    revision: str,
+    budget: int,
+    overlap: int,
+) -> dict:
     documents = load_corpus(corpus_dir)
-    codec = HuggingFaceCodec(model_name)
+    codec = HuggingFaceCodec(model_name, revision)
     prepared = prepare_documents(documents, codec=codec, budget=budget, overlap=overlap)
     chunks = []
     for document in prepared:
@@ -31,6 +37,7 @@ def build_manifest_payload(corpus_dir: Path, model_name: str, budget: int, overl
         "synthetic": True,
         "company": "Northline Telecom",
         "embedding_model": model_name,
+        "embedding_revision": revision,
         "token_budget": budget,
         "token_overlap": overlap,
         "tokenizer": "content tokens only; special tokens are not counted",
@@ -44,6 +51,7 @@ def main() -> None:
     payload = build_manifest_payload(
         Path(settings.corpus_dir),
         settings.embedding_model,
+        settings.embedding_revision,
         settings.chunk_token_budget,
         settings.chunk_overlap_tokens,
     )

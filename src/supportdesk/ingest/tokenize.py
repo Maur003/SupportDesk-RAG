@@ -36,11 +36,14 @@ class HuggingFaceCodec:
     400-token content chunk still fits at embed time.
     """
 
-    def __init__(self, model_name: str) -> None:
+    def __init__(self, model_name: str, revision: str) -> None:
         from transformers import AutoTokenizer
 
         self.model_name = model_name
-        self._tokenizer = AutoTokenizer.from_pretrained(model_name)
+        self.revision = revision
+        # revision is a commit id. The default "main" would move chunk boundaries
+        # when the Hub tokenizer changes.
+        self._tokenizer = AutoTokenizer.from_pretrained(model_name, revision=revision)
 
     def encode(self, text: str) -> list[int]:
         encoded = self._tokenizer.encode(text, add_special_tokens=False)
