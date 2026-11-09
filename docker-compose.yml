@@ -15,16 +15,39 @@ services:
     volumes:
       - pgdata:/var/lib/postgresql/data
 
+  crm:
+    build: .
+    command: python -m uvicorn supportdesk.crm_server:app --host 0.0.0.0 --port 8001
+    environment:
+      CRM_API_KEY: supportdesk-crm-dev
+    ports:
+      - "8001:8001"
+    healthcheck:
+      test:
+        [
+          "CMD",
+          "python",
+          "-c",
+          "import urllib.request; urllib.request.urlopen('http://127.0.0.1:8001/health')",
+        ]
+      interval: 5s
+      timeout: 5s
+      retries: 12
+
   api:
     build: .
     env_file:
       - .env.example
     environment:
       DATABASE_URL: postgresql+psycopg://supportdesk:supportdesk@db:5432/supportdesk
+      CRM_BASE_URL: http://crm:8001
+      CRM_API_KEY: supportdesk-crm-dev
     ports:
       - "8000:8000"
     depends_on:
       db:
+        condition: service_healthy
+      crm:
         condition: service_healthy
 
 volumes:

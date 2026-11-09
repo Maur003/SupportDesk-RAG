@@ -6,3 +6,4 @@ def main() -> None:
     print("  python -m supportdesk.eval")
     print("  python -m supportdesk.token <customer|agent|finance>")
     print("API: python -m uvicorn supportdesk.main:app --reload")
+    print("CRM: python -m uvicorn supportdesk.crm_server:app --port 8001")

@@ -16,8 +16,9 @@ class Settings(BaseSettings):
     """Runtime configuration. Model ids are settings, not literals at the call site.
 
     The judge model must differ from the generator. The judge temperature is fixed
-    at 0. The first Gemini call checks both ids with client.models.list() and
-    refuses to generate if either id is absent. This phase does not call Gemini.
+    at 0. A real Gemini generate calls client.models.list() once before
+    generate_content and refuses if the generator id or the judge id is absent.
+    Automatic function calling stays disabled. Tests inject a fake and do not call Gemini.
     """
 
     model_config = SettingsConfigDict(
@@ -40,7 +41,13 @@ class Settings(BaseSettings):
     judge_model: str = "gemini-2.5-flash"
     judge_temperature: float = 0.0
     gemini_api_key: str = ""
+    generator_temperature: float = 0.0
     jwt_secret: str = "supportdesk-dev-secret"
+    crm_base_url: str = "http://localhost:8001"
+    crm_api_key: str = "supportdesk-crm-dev"
+    crm_timeout_seconds: float = 2.0
+    crm_retry_attempts: int = 3
+    crm_retry_backoff_seconds: float = 0.2
 
     @model_validator(mode="after")
     def check_models_and_chunks(self) -> "Settings":
@@ -58,6 +65,14 @@ class Settings(BaseSettings):
             )
         if not self.jwt_secret.strip():
             raise ValueError("jwt_secret must not be empty")
+        if not self.crm_api_key.strip():
+            raise ValueError("crm_api_key must not be empty")
+        if self.crm_timeout_seconds <= 0:
+            raise ValueError("crm_timeout_seconds must be > 0")
+        if self.crm_retry_attempts < 1:
+            raise ValueError("crm_retry_attempts must be >= 1")
+        if self.crm_retry_backoff_seconds < 0:
+            raise ValueError("crm_retry_backoff_seconds must be >= 0")
         _require_commit(self.embedding_revision, "embedding_revision")
         _require_commit(self.rerank_revision, "rerank_revision")
         return self

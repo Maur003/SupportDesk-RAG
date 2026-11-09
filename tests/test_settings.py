@@ -45,3 +45,16 @@ def test_jwt_secret_must_not_be_empty() -> None:
 def test_rerank_revision_must_be_a_commit() -> None:
     with pytest.raises(ValidationError):
         Settings(rerank_revision="main")
+
+
+def test_crm_retry_settings() -> None:
+    settings = Settings()
+    assert settings.crm_base_url == "http://localhost:8001"
+    assert settings.crm_retry_attempts == 3
+    assert settings.crm_timeout_seconds == 2.0
+    with pytest.raises(ValidationError):
+        Settings(crm_api_key="  ")
+    with pytest.raises(ValidationError):
+        Settings(crm_timeout_seconds=0)
+    with pytest.raises(ValidationError):
+        Settings(crm_retry_attempts=0)

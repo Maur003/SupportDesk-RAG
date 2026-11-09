@@ -1,7 +1,7 @@
 [project]
 name = "supportdesk"
 version = "0.1.0"
-description = "Synthetic Northline Telecom support agent. Retrieval and evaluation land in later phases."
+description = "Synthetic Northline Telecom support agent."
 requires-python = ">=3.11"
 dependencies = [
     "fastapi==0.162.2",
@@ -13,11 +13,13 @@ dependencies = [
     "alembic==1.20.1",
     "pypdf==7.0.0",
     "PyJWT==2.10.1",
+    "httpx==0.28.1",
+    "google-genai==3.0.0",
     "sentence-transformers==6.2.0",
 ]
 
 [project.optional-dependencies]
-dev = ["pytest==9.2.0", "httpx==0.28.1", "ruff==0.17.4"]
+dev = ["pytest==9.2.0", "ruff==0.17.4"]
 
 [build-system]
 requires = ["setuptools>=68"]

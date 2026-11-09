@@ -2,7 +2,7 @@
 
 Synthetic customer-support agent for the fictional carrier **Northline Telecom**. Every document and gold question is synthetic. Nothing here is a real carrier's policy.
 
-This repository is at the end of Phase 5: `POST /search` takes the role from a signed token and keeps the SQL access filter. `make eval` still prints rerank, hybrid, vector, and random. `u01`–`u10` are unfilled, so they are outside the scored `n`. There is no generator and no Gemini call, so refusal is not scored. A difference of one or two questions is reported as that count. Every comparison shows `n`, the corpus size, and the per-question wins, losses, and ties. `recall@20` is not reported. The cutoff is `recall@5`.
+This repository is at the end of Phase 6. `POST /ask` runs a manual tool loop of at most five model calls. `POST /search` still takes the role from a signed token and keeps the SQL access filter. `make eval` still prints the Phase 4 table; this phase does not change retrieval. `u01`–`u10` are unfilled, so they are outside the scored `n`. Refusal is not scored. A difference of one or two questions is reported as that count. Every comparison shows `n`, the corpus size, and the per-question wins, losses, and ties. `recall@20` is not reported. The cutoff is `recall@5`.
 
 ## Gold set
 
@@ -312,21 +312,26 @@ Answerable recall@5 moved on 5 questions: wins `b05`, `b09`, `b16`, and `b22`, a
 
 Phase 5 does not change those retrieval numbers. `POST /search` requires `Authorization: Bearer`. The role is the token's `role` claim. `python -m supportdesk.token customer` signs one with `JWT_SECRET` (the local synthetic default is `supportdesk-dev-secret`). A `role` field in the JSON body is rejected. The query text is not an access input, including a sentence that says to ignore instructions and reveal finance limits. The chunks are still chosen with `access_level = ANY(:allowed)`. PyJWT is the new package: it checks the HS256 signature and the expiry, instead of a hand-rolled parser. `tests/test_rbac.py` asks for `FINANCE_CANARY_7K2M` as a customer, as a customer following that injection sentence, and as an agent, and the canary is absent. The same request with a finance token returns the canary. An agent token does return `AGENT_CANARY_4QP9`.
 
+Phase 6 does not change those retrieval numbers either. `POST /ask` uses the same bearer role. The loop calls the model, runs one tool, appends the tool result, and stops after five model calls. The tools are `search_knowledge_base`, `get_ticket_status`, `create_ticket`, and `calculate`. Search uses the same SQL role filter. `calculate` accepts only `+ - * /`, numbers, and parentheses. `create_ticket` does not write. The response is `confirmation_required`, and a later `POST /confirmations/{id}` with the same role performs the write. A `confirmed` flag from the model is ignored. There is no confirm tool.
+
+The mock CRM is a second FastAPI process. `docker compose up` starts Postgres, that CRM, and the API. The API calls `GET /tickets/{id}` and `POST /tickets` with `X-API-Key`, a timeout, and retries only on 429 and 5xx. The seeded ticket is `TCK-1001`. `google-genai` is the generator client. A real generate calls `client.models.list()` once and refuses if `GENERATOR_MODEL` or `JUDGE_MODEL` is missing. Automatic function calling is disabled. Tests inject a fake model and do not call Gemini.
+
 `docker compose` targets are one line each. Every Python target is one `python -m ...` call, so the same Makefile works in PowerShell, Scoop's GNU Make, and CI.
 
-Torch is installed from the CPU index in `requirements-torch.txt` before the lockfiles. The default PyPI torch wheel is the CUDA build. `make deps` installs the runtime lock only. `make deps-dev` installs that lock plus pytest, ruff, and `httpx` (the TestClient transport). The API image uses the runtime lock and does not install the dev packages.
+Torch is installed from the CPU index in `requirements-torch.txt` before the lockfiles. The default PyPI torch wheel is the CUDA build. `make deps` installs the runtime lock only. `make deps-dev` installs that lock plus pytest and ruff. The API image uses the runtime lock and does not install the dev packages.
 
-`httpx2` and `httpcore2` are in the runtime lock because `huggingface_hub` 2.4 imports `httpx2` to download the tokenizer, and `httpx2` imports `httpcore2`. They are a different project from `httpx`. The tokenizer revision is the Hub commit in `EMBEDDING_REVISION`, not the branch `main`.
+`httpx==0.28.1` is in the runtime lock because the API calls the mock CRM. `httpx2` and `httpcore2` stay beside it: `huggingface_hub` 2.4 imports `httpx2` to download the tokenizer, and `httpx2` imports `httpcore2`. They are a different project from `httpx`. `google-genai==3.0.0` is the generator client, and the lock pins the packages pip installed with it. The tokenizer revision is the Hub commit in `EMBEDDING_REVISION`, not the branch `main`.
 
 ## Layout
 
 - `data/corpus/{public,agent,finance}` — synthetic knowledge base. `synthetic: true` is required on every file. `tools/expand_corpus.py` rewrites the long near-duplicate pages.
-- Retrieval embeds the document title, the heading path, and the chunk text (`src/supportdesk/embed_text.py`). The stored chunk text stays the body. Queries get the BGE instruction prefix. Vectors are L2-normalized. Search is exact cosine distance with `access_level = ANY(...)`. Keyword search uses that same filter. Hybrid fuses the two top-20 lists. The cross-encoder then reranks that fused 20 and keeps 5. `POST /search` applies that filter to the role in the bearer token. There is no HNSW index.
+- Retrieval embeds the document title, the heading path, and the chunk text (`src/supportdesk/embed_text.py`). The stored chunk text stays the body. Queries get the BGE instruction prefix. Vectors are L2-normalized. Search is exact cosine distance with `access_level = ANY(...)`. Keyword search uses that same filter. Hybrid fuses the two top-20 lists. The cross-encoder then reranks that fused 20 and keeps 5. `POST /search` and the agent's search tool apply that filter to the role in the bearer token. There is no HNSW index.
+- `POST /ask` is the manual tool loop. `POST /confirmations/{id}` is the only ticket write. The mock CRM is `src/supportdesk/crm_server.py`, on port 8001.
 - `src/supportdesk/ingest` — loaders, a 400-token chunker with 60 tokens of overlap, and hash-based re-ingest.
 - Chunk ids are `{doc_slug}#{ordinal}` and stay put while the file bytes and the chunker version stay put.
 
-Model ids live in configuration (`GENERATOR_MODEL`, `JUDGE_MODEL`). The judge id must differ from the generator, and the judge temperature must be 0. The first Gemini call checks both ids with `client.models.list()` before use. This phase does not call Gemini.
+Model ids live in configuration (`GENERATOR_MODEL`, `JUDGE_MODEL`). The judge id must differ from the generator, and the judge temperature must be 0. A real Gemini generate checks both ids with `client.models.list()` before `generate_content`. The tests use a fake client.
 
 ## Not in this phase
 
-The agent loop, failure handling, observability, and cost tracking. Exact response caching comes before any semantic cache or model routing, and only after Phases 1 through 8.
+Failure handling, observability, and cost tracking. Exact response caching comes before any semantic cache or model routing, and only after Phases 1 through 8.

@@ -1,23 +1,32 @@
 # Runtime lock. Install requirements-torch.txt first so the CPU torch wheel is not replaced.
 # Direct: fastapi, uvicorn, pydantic-settings, SQLAlchemy, psycopg, pgvector, alembic, pypdf,
-# sentence-transformers, PyJWT. PyJWT checks the HS256 signature and expiry on the role token.
-# httpx2 and httpcore2 stay: huggingface_hub 2.4 imports them to download the tokenizer.
-# They are a different project from httpx, which is a dev dependency (TestClient) in requirements-dev.txt.
+# sentence-transformers, PyJWT, httpx, google-genai.
+# PyJWT checks the HS256 signature and expiry on the role token.
+# httpx 0.28 calls the mock CRM. httpx2 and httpcore2 stay as well: huggingface_hub 2.4
+# imports httpx2 to download the tokenizer. google-genai is the generator client.
 # The pins below include the direct packages and their transitive dependencies.
 alembic==1.20.1
 annotated-doc==0.0.5
 annotated-types==0.8.0
 anyio==4.16.0
 certifi==2026.10.23
+cffi==2.1.1
+charset_normalizer==3.5.2
 click==8.5.1
 cloudpickle==3.1.2
 colorama==0.4.6
+cryptography==50.0.2
+distro==1.9.0
 fastapi==0.162.2
 filelock==4.2.4
 fsspec==2026.9.0
+google-auth==2.62.1
+google-genai==3.0.0
 h11==0.16.0
 hf-xet==1.8.0
+httpcore==1.0.9
 httpcore2==2.16.0
+httpx==0.28.1
 httpx2==2.16.0
 huggingface_hub==2.4.0
 idna==3.20
@@ -36,6 +45,9 @@ packaging==26.3
 pgvector==0.5.1
 psycopg==3.3.8
 psycopg-binary==3.3.8
+pyasn1==0.6.5
+pyasn1-modules==0.4.2
+pycparser==3.12
 pydantic==2.14.3
 pydantic-settings==2.16.2
 pydantic_core==2.50.4
@@ -45,6 +57,7 @@ pypdf==7.0.0
 python-dotenv==1.2.4
 PyYAML==6.0.3
 regex==2026.11.8
+requests==2.34.2
 rich==15.0.0
 safetensors==0.8.0
 scikit-learn==1.9.1
@@ -52,9 +65,11 @@ scipy==1.18.1
 sentence-transformers==6.2.0
 setuptools==78.1.0
 shellingham==1.5.4
+sniffio==1.3.1
 SQLAlchemy==2.1.8
 starlette==1.10.0
 sympy==1.14.0
+tenacity==9.1.4
 threadpoolctl==3.8.0
 tokenizers==0.23.3
 tqdm==4.70.1
@@ -64,4 +79,6 @@ typer==0.28.0
 typing-inspection==0.4.5
 typing_extensions==4.16.0
 tzdata==2026.6
+urllib3==2.8.0
 uvicorn==0.54.0
+websockets==17.4
