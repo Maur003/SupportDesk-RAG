@@ -1,6 +1,10 @@
-"""Exact cosine search. The access filter is SQL, not a Python post-filter."""
+"""Vector search, keyword search, and reciprocal rank fusion.
 
-from sqlalchemy import any_, bindparam, select
+The access filter is SQL, not a Python post-filter. Keyword search uses the
+same `access_level = ANY(:allowed)` predicate as the vector query.
+"""
+
+from sqlalchemy import any_, bindparam, func, literal_column, select
 from sqlalchemy.dialects.postgresql import ARRAY
 from sqlalchemy.orm import Session
 
@@ -9,6 +13,8 @@ from supportdesk.embedder import BgeEmbedder
 from supportdesk.models import Chunk, access_level_enum
 
 RETRIEVAL_K = 5
+CANDIDATE_K = 20
+RRF_K = 60
 
 
 def embed_missing(session: Session, embedder: BgeEmbedder) -> int:
@@ -52,3 +58,89 @@ def search_chunks(
     )
     rows = session.execute(statement, {"allowed": list(allowed)}).all()
     return [(str(row.id), float(row.distance)) for row in rows]
+
+
+def keyword_statement(k: int):
+    """SQL for keyword search. The access predicate is part of the statement."""
+
+    query_param = bindparam("query", unique=False)
+    tsquery = func.websearch_to_tsquery(literal_column("'english'"), query_param)
+    rank = func.ts_rank_cd(Chunk.search_vector, tsquery)
+    allowed_param = bindparam("allowed", type_=ARRAY(access_level_enum))
+    return (
+        select(Chunk.id, rank.label("rank"))
+        .where(Chunk.embedding.is_not(None))
+        .where(Chunk.search_vector.op("@@")(tsquery))
+        .where(Chunk.access_level == any_(allowed_param))
+        .order_by(rank.desc(), Chunk.id)
+        .limit(k)
+    )
+
+
+def keyword_search(
+    session: Session,
+    query: str,
+    allowed: tuple[str, ...],
+    k: int = CANDIDATE_K,
+) -> list[tuple[str, float]]:
+    """Return up to k (chunk id, ts_rank_cd) pairs, highest rank first.
+
+    The query is the question text. `websearch_to_tsquery` ANDs the remaining
+    words after English stop-words are removed. Rank ties break on chunk id.
+    """
+
+    if k < 1:
+        raise ValueError("k must be positive")
+    statement = keyword_statement(k)
+    rows = session.execute(statement, {"query": query, "allowed": list(allowed)}).all()
+    return [(str(row.id), float(row.rank)) for row in rows]
+
+
+def fuse_rankings(rankings: list[list[str]], *, rrf_k: int = RRF_K) -> list[tuple[str, float]]:
+    """Reciprocal rank fusion. Rank 1 is the best row in each list.
+
+    Score is the sum of `1 / (rrf_k + rank)`. A chunk in only one list still
+    scores. Equal scores break on chunk id, so the order does not depend on
+    dict order.
+    """
+
+    if rrf_k < 0:
+        raise ValueError("rrf_k must be non-negative")
+    scores: dict[str, float] = {}
+    for ranking in rankings:
+        seen: set[str] = set()
+        rank = 0
+        for chunk_id in ranking:
+            if chunk_id in seen:
+                continue
+            seen.add(chunk_id)
+            rank += 1
+            scores[chunk_id] = scores.get(chunk_id, 0.0) + 1.0 / (rrf_k + rank)
+    ordered = sorted(scores, key=lambda chunk_id: (-scores[chunk_id], chunk_id))
+    return [(chunk_id, scores[chunk_id]) for chunk_id in ordered]
+
+
+def hybrid_search(
+    session: Session,
+    query: str,
+    query_vector: list[float],
+    allowed: tuple[str, ...],
+    k: int = RETRIEVAL_K,
+    candidate_k: int = CANDIDATE_K,
+) -> list[tuple[str, float]]:
+    """Fuse the top `candidate_k` vector hits and keyword hits, then keep k.
+
+    The vector query is the embedding of `query`. The keyword query is `query`
+    itself, without the embedding instruction prefix.
+    """
+
+    if k < 1:
+        raise ValueError("k must be positive")
+    vector_ids = [
+        chunk_id
+        for chunk_id, _distance in search_chunks(session, query_vector, allowed, candidate_k)
+    ]
+    keyword_ids = [
+        chunk_id for chunk_id, _rank in keyword_search(session, query, allowed, candidate_k)
+    ]
+    return fuse_rankings([vector_ids, keyword_ids])[:k]

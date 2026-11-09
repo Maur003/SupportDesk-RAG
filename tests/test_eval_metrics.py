@@ -6,18 +6,35 @@ from supportdesk.eval import enforce_floors
 from supportdesk.eval_metrics import ndcg_at_k, precision_at_k, recall_at_k, reciprocal_rank
 
 
-def _report(recall: float, leak: float = 0.0, absent_hit: float = 0.0) -> dict:
+def _report(
+    recall: float,
+    leak: float = 0.0,
+    absent_hit: float = 0.0,
+    hybrid_leak: float = 0.0,
+    hybrid_absent_hit: float = 0.0,
+) -> dict:
     return {
         "tables": [
-            {"group": "answerable", "vector": {"recall_at_5": recall}},
-            {"group": "permission_trap", "vector": leak},
-            {"group": "unanswerable", "vector": absent_hit},
+            {
+                "group": "answerable",
+                "vector": {"recall_at_5": recall},
+                "hybrid": {"recall_at_5": recall},
+            },
+            {"group": "permission_trap", "vector": leak, "hybrid": hybrid_leak},
+            {"group": "unanswerable", "vector": absent_hit, "hybrid": hybrid_absent_hit},
         ]
     }
 
 
 def test_floor_accepts_a_recall_above_the_guard() -> None:
     enforce_floors(_report(0.6310))
+
+
+def test_floor_rejects_a_collapsed_hybrid_recall() -> None:
+    report = _report(0.6310)
+    report["tables"][0]["hybrid"]["recall_at_5"] = 0.49
+    with pytest.raises(SystemExit):
+        enforce_floors(report)
 
 
 def test_floor_rejects_a_collapsed_recall_or_a_leak() -> None:
@@ -27,6 +44,10 @@ def test_floor_rejects_a_collapsed_recall_or_a_leak() -> None:
         enforce_floors(_report(0.6310, leak=1.0))
     with pytest.raises(SystemExit):
         enforce_floors(_report(0.6310, absent_hit=1.0))
+    with pytest.raises(SystemExit):
+        enforce_floors(_report(0.6310, hybrid_leak=1.0))
+    with pytest.raises(SystemExit):
+        enforce_floors(_report(0.6310, hybrid_absent_hit=1.0))
 
 
 def test_precision_divides_by_k_when_the_list_is_short() -> None:

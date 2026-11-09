@@ -1,4 +1,4 @@
-"""Baseline vector retrieval scores. No generator and no Gemini call."""
+"""Vector, hybrid, and random retrieval scores. No generator and no Gemini call."""
 
 import json
 import random
@@ -13,13 +13,21 @@ from supportdesk.db import make_engine, make_session_factory
 from supportdesk.embedder import QUERY_INSTRUCTION, BgeEmbedder
 from supportdesk.eval_metrics import ndcg_at_k, precision_at_k, recall_at_k, reciprocal_rank
 from supportdesk.models import Chunk
-from supportdesk.retrieve import RETRIEVAL_K, search_chunks
+from supportdesk.retrieve import (
+    CANDIDATE_K,
+    RETRIEVAL_K,
+    RRF_K,
+    fuse_rankings,
+    keyword_search,
+    search_chunks,
+)
 
 GOLD_PATH = Path("data/gold/questions.json")
 REPORT_PATH = Path("reports/retrieval.json")
 RANDOM_SEED = 0
-# Guard, not the reported result. The measured answerable recall@5 on this
-# corpus was 0.6310. About five single-support misses still clear 0.50.
+# Guard, not the reported result. Measured answerable recall@5 was 0.6310
+# for the vector list and for hybrid. About five single-support misses still
+# clear 0.50.
 ANSWERABLE_RECALL_FLOOR = 0.50
 
 
@@ -40,14 +48,17 @@ def main() -> None:
 
 def enforce_floors(report: dict) -> None:
     tables = {table["group"]: table for table in report["tables"]}
-    recall = tables["answerable"]["vector"]["recall_at_5"]
-    if recall < ANSWERABLE_RECALL_FLOOR:
-        raise SystemExit(
-            f"answerable recall@5 {recall:.4f} is below the guard {ANSWERABLE_RECALL_FLOOR:.2f}"
-        )
+    for side in ("vector", "hybrid"):
+        recall = tables["answerable"][side]["recall_at_5"]
+        if recall < ANSWERABLE_RECALL_FLOOR:
+            raise SystemExit(
+                f"answerable {side} recall@5 {recall:.4f} "
+                f"is below the guard {ANSWERABLE_RECALL_FLOOR:.2f}"
+            )
     for group in ("permission_trap", "unanswerable"):
-        if tables[group]["vector"] > 0:
-            raise SystemExit(f"{group} vector rate is above 0")
+        for side in ("vector", "hybrid"):
+            if tables[group][side] > 0:
+                raise SystemExit(f"{group} {side} rate is above 0")
 
 
 def evaluate(
@@ -78,15 +89,29 @@ def evaluate(
             chunk_id for chunk_id, _distance in search_chunks(session, query_vector, allowed, k)
         ]
         random_ids = rng.sample(pool, k) if len(pool) >= k else list(pool)
+        keyword_ids = [
+            chunk_id
+            for chunk_id, _rank in keyword_search(
+                session, question["question"], allowed, CANDIDATE_K
+            )
+        ]
+        vector_ids = [
+            chunk_id
+            for chunk_id, _distance in search_chunks(session, query_vector, allowed, CANDIDATE_K)
+        ]
+        fused = [chunk_id for chunk_id, _score in fuse_rankings([vector_ids, keyword_ids])[:k]]
         relevant = {support["chunk_id"] for support in question["supports"]}
         kind = question["type"]
         if kind == "answerable":
+            hybrid_metrics = _rank_metrics(fused, relevant, k)
             vector_metrics = _rank_metrics(retrieved, relevant, k)
             random_metrics = _rank_metrics(random_ids, relevant, k)
         elif kind == "permission_trap":
+            hybrid_metrics = {"leak": _leaked(fused, relevant, catalog, question)}
             vector_metrics = {"leak": _leaked(retrieved, relevant, catalog, question)}
             random_metrics = {"leak": _leaked(random_ids, relevant, catalog, question)}
         elif kind == "unanswerable":
+            hybrid_metrics = {"absent_hit": _absent_hit(fused, catalog, question)}
             vector_metrics = {"absent_hit": _absent_hit(retrieved, catalog, question)}
             random_metrics = {"absent_hit": _absent_hit(random_ids, catalog, question)}
         else:
@@ -97,8 +122,11 @@ def evaluate(
                 "type": kind,
                 "role": role,
                 "wording": question.get("wording", "lexical"),
+                "hybrid": hybrid_metrics,
                 "vector": vector_metrics,
                 "random": random_metrics,
+                "keyword_count": len(keyword_ids),
+                "top5_changed": fused != retrieved,
             }
         )
     corpus_size = len(catalog)
@@ -109,6 +137,12 @@ def evaluate(
         "embedding_model": embedder.model_id,
         "query_instruction": QUERY_INSTRUCTION,
         "passage_input": "title, heading_path, text",
+        "candidate_k": CANDIDATE_K,
+        "rrf_k": RRF_K,
+        "keyword": "websearch_to_tsquery english, ts_rank_cd",
+        "questions_scored": len(scored),
+        "keyword_nonempty": sum(row["keyword_count"] > 0 for row in scored),
+        "top5_changed": sum(row["top5_changed"] for row in scored),
         "tables": _tables(scored, corpus_size),
         "questions": scored,
     }
@@ -164,44 +198,53 @@ def _tables(scored: list[dict], corpus_size: int) -> list[dict]:
 
 def _summarize(name: str, rows: list[dict], corpus_size: int) -> dict:
     if rows[0]["type"] == "answerable":
-        wins, losses, ties = _compare(rows, "recall_at_5", higher_is_better=True)
+        versus_vector = _compare(rows, "recall_at_5", "hybrid", "vector", higher_is_better=True)
+        versus_random = _compare(rows, "recall_at_5", "hybrid", "random", higher_is_better=True)
         return {
             "group": name,
             "n": len(rows),
             "corpus_size": corpus_size,
+            "hybrid": _mean_metrics(rows, "hybrid"),
             "vector": _mean_metrics(rows, "vector"),
             "random": _mean_metrics(rows, "random"),
-            "recall_at_5_wins": wins,
-            "recall_at_5_losses": losses,
-            "recall_at_5_ties": ties,
+            "hybrid_vs_vector": versus_vector,
+            "hybrid_vs_random": versus_random,
         }
     key = "leak" if rows[0]["type"] == "permission_trap" else "absent_hit"
-    wins, losses, ties = _compare(rows, key, higher_is_better=False)
+    versus_vector = _compare(rows, key, "hybrid", "vector", higher_is_better=False)
+    versus_random = _compare(rows, key, "hybrid", "random", higher_is_better=False)
     return {
         "group": name,
         "n": len(rows),
         "corpus_size": corpus_size,
         "metric": key,
+        "hybrid": _mean_flag(rows, "hybrid", key),
         "vector": _mean_flag(rows, "vector", key),
         "random": _mean_flag(rows, "random", key),
-        "wins": wins,
-        "losses": losses,
-        "ties": ties,
+        "hybrid_vs_vector": versus_vector,
+        "hybrid_vs_random": versus_random,
     }
 
 
-def _compare(rows: list[dict], key: str, *, higher_is_better: bool) -> tuple[int, int, int]:
+def _compare(
+    rows: list[dict],
+    key: str,
+    left: str,
+    right: str,
+    *,
+    higher_is_better: bool,
+) -> dict[str, int]:
     wins = losses = ties = 0
     for row in rows:
-        vector = row["vector"][key]
-        baseline = row["random"][key]
-        if vector == baseline:
+        candidate = row[left][key]
+        baseline = row[right][key]
+        if candidate == baseline:
             ties += 1
-        elif (vector > baseline) == higher_is_better:
+        elif (candidate > baseline) == higher_is_better:
             wins += 1
         else:
             losses += 1
-    return wins, losses, ties
+    return {"wins": wins, "losses": losses, "ties": ties}
 
 
 def _mean_metrics(rows: list[dict], side: str) -> dict[str, float]:
@@ -221,31 +264,35 @@ def render(report: dict) -> str:
         f"embedding_model: {report['embedding_model']}",
         f"query_instruction: {report['query_instruction']}",
         f"passage_input: {report['passage_input']}",
+        f"candidate_k: {report['candidate_k']}",
+        f"rrf_k: {report['rrf_k']}",
+        f"keyword: {report['keyword']}",
+        f"questions_scored: {report['questions_scored']}",
+        f"keyword_nonempty: {report['keyword_nonempty']}",
+        f"top5_changed: {report['top5_changed']}",
         "",
-        "answerable groups compare vector retrieval with a random draw",
-        "from the chunks that role may see.",
-        "wins, losses, and ties are per question on recall@5. recall@20 is not reported.",
+        "hybrid fuses the top candidate_k vector hits and keyword hits with RRF.",
+        "the scored cutoff is k. recall@20 is not reported.",
+        "wins, losses, and ties are per question, hybrid against vector and against random.",
         "",
     ]
     for table in report["tables"]:
-        if "recall_at_5_wins" in table:
-            lines.extend(_render_rank(table))
-        else:
+        if "metric" in table:
             lines.extend(_render_flag(table))
+        else:
+            lines.extend(_render_rank(table))
         lines.append("")
     return "\n".join(lines).rstrip() + "\n"
 
 
 def _render_rank(table: dict) -> list[str]:
-    header = (
-        f"{table['group']} n={table['n']} corpus_size={table['corpus_size']} "
-        f"recall@5 wins={table['recall_at_5_wins']} "
-        f"losses={table['recall_at_5_losses']} ties={table['recall_at_5_ties']}"
-    )
     columns = ("recall_at_5", "precision_at_5", "mrr", "ndcg_at_5")
     return [
-        header,
+        _group_header(table),
+        _pair_line("recall@5 hybrid vs vector", table["hybrid_vs_vector"]),
+        _pair_line("recall@5 hybrid vs random", table["hybrid_vs_random"]),
         "method     recall@5  precision@5  MRR     nDCG@5",
+        _rank_row("hybrid", table["hybrid"], columns),
         _rank_row("vector", table["vector"], columns),
         _rank_row("random", table["random"], columns),
     ]
@@ -256,13 +303,21 @@ def _rank_row(name: str, metrics: dict, columns: tuple[str, ...]) -> str:
     return f"{name:<10} {cells}"
 
 
+def _group_header(table: dict) -> str:
+    return f"{table['group']} n={table['n']} corpus_size={table['corpus_size']}"
+
+
+def _pair_line(label: str, counts: dict[str, int]) -> str:
+    return f"{label} wins={counts['wins']} losses={counts['losses']} ties={counts['ties']}"
+
+
 def _render_flag(table: dict) -> list[str]:
+    metric = table["metric"]
     return [
-        (
-            f"{table['group']} n={table['n']} corpus_size={table['corpus_size']} "
-            f"metric={table['metric']} wins={table['wins']} "
-            f"losses={table['losses']} ties={table['ties']}"
-        ),
+        f"{_group_header(table)} metric={metric}",
+        _pair_line(f"{metric} hybrid vs vector", table["hybrid_vs_vector"]),
+        _pair_line(f"{metric} hybrid vs random", table["hybrid_vs_random"]),
+        f"hybrid {table['hybrid']:.4f}",
         f"vector {table['vector']:.4f}",
         f"random {table['random']:.4f}",
     ]

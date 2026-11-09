@@ -2,7 +2,7 @@
 
 Synthetic customer-support agent for the fictional carrier **Northline Telecom**. Every document and gold question is synthetic. Nothing here is a real carrier's policy.
 
-This repository is at the end of Phase 2: baseline vector retrieval and `make eval`. The table below is that command's stdout. `u01`–`u10` are unfilled, so they are outside the scored `n`. There is no generator and no Gemini call, so refusal is not scored. A difference of one or two questions is reported as that count. Every comparison shows `n`, the corpus size, a random-retrieval row, and the per-question wins, losses, and ties. `recall@20` is not reported. The cutoff is `recall@5`.
+This repository is at the end of Phase 3: keyword search fused with the Phase 2 vector list. `make eval` prints hybrid, vector, and random. `u01`–`u10` are unfilled, so they are outside the scored `n`. There is no generator and no Gemini call, so refusal is not scored. A difference of one or two questions is reported as that count. Every comparison shows `n`, the corpus size, and the per-question wins, losses, and ties. `recall@20` is not reported. The cutoff is `recall@5`.
 
 ## Gold set
 
@@ -69,7 +69,7 @@ The next run printed `"unchanged": 121`, `"chunks_written": 0`, and `"embeddings
 
 Ingest can print a tokenizer warning that a sequence is longer than 512. On this corpus the packer measured a 771-token candidate. That candidate is two sections joined to see if they fit. Stored chunks stay inside the 400-token budget. `tests/test_gold.py` rejects an embedding input that does not fit in 512 tokens, including the two special tokens.
 
-`make eval` printed:
+Phase 2, vector against random, `make eval` printed:
 
 ```text
 corpus_size: 280
@@ -126,7 +126,92 @@ A second `make eval` printed the same table. `precision@5` divides by 5, so one 
 
 The paraphrase group is 7 wins and 15 ties. All 15 ties are recall 0 for both methods. Agent is 4 wins out of 10. Finance is 3 wins out of 10. Those ties are misses too. Permission traps and unanswerable questions are 0 for both methods. The random draw only uses chunks that role may see, and the absent terms do not occur in the corpus.
 
-`make eval` exits if answerable recall@5 falls below 0.50, or if a permission trap or an unanswerable question scores above 0. The measured recall@5 is 0.6310. 0.50 is the guard.
+`make eval` exits if the vector or the hybrid answerable recall@5 falls below 0.50, or if either method scores above 0 on a permission trap or an unanswerable question. Both measured recall@5 figures are 0.6310. 0.50 is the guard.
+
+Phase 3 fuses the top 20 vector hits and the top 20 keyword hits with reciprocal rank fusion, `1 / (60 + rank)`, and keeps 5. Keyword search is `websearch_to_tsquery('english', question)` and `ts_rank_cd`, with the same `access_level = ANY(...)` filter. The question text is the keyword query. The embedding instruction is not prepended to it. A second `make eval` printed the same table:
+
+```text
+corpus_size: 280
+k: 5
+random_seed: 0
+embedding_model: BAAI/bge-small-en-v1.5@5c38ec7c405ec4b44b94cc5a9bb96e735b38267a
+query_instruction: Represent this sentence for searching relevant passages: 
+passage_input: title, heading_path, text
+candidate_k: 20
+rrf_k: 60
+keyword: websearch_to_tsquery english, ts_rank_cd
+questions_scored: 52
+keyword_nonempty: 7
+top5_changed: 2
+
+hybrid fuses the top candidate_k vector hits and keyword hits with RRF.
+the scored cutoff is k. recall@20 is not reported.
+wins, losses, and ties are per question, hybrid against vector and against random.
+
+answerable n=42 corpus_size=280
+recall@5 hybrid vs vector wins=0 losses=0 ties=42
+recall@5 hybrid vs random wins=26 losses=0 ties=16
+method     recall@5  precision@5  MRR     nDCG@5
+hybrid     0.6310  0.1286  0.6131  0.6113
+vector     0.6310  0.1286  0.6131  0.6113
+random     0.0238  0.0048  0.0048  0.0092
+
+lexical n=20 corpus_size=280
+recall@5 hybrid vs vector wins=0 losses=0 ties=20
+recall@5 hybrid vs random wins=19 losses=0 ties=1
+method     recall@5  precision@5  MRR     nDCG@5
+hybrid     0.9750  0.2000  1.0000  0.9807
+vector     0.9750  0.2000  1.0000  0.9807
+random     0.0500  0.0100  0.0100  0.0193
+
+paraphrase n=22 corpus_size=280
+recall@5 hybrid vs vector wins=0 losses=0 ties=22
+recall@5 hybrid vs random wins=7 losses=0 ties=15
+method     recall@5  precision@5  MRR     nDCG@5
+hybrid     0.3182  0.0636  0.2614  0.2755
+vector     0.3182  0.0636  0.2614  0.2755
+random     0.0000  0.0000  0.0000  0.0000
+
+customer n=22 corpus_size=280
+recall@5 hybrid vs vector wins=0 losses=0 ties=22
+recall@5 hybrid vs random wins=19 losses=0 ties=3
+method     recall@5  precision@5  MRR     nDCG@5
+hybrid     0.8864  0.1818  0.8864  0.8747
+vector     0.8864  0.1818  0.8864  0.8747
+random     0.0455  0.0091  0.0091  0.0176
+
+agent n=10 corpus_size=280
+recall@5 hybrid vs vector wins=0 losses=0 ties=10
+recall@5 hybrid vs random wins=4 losses=0 ties=6
+method     recall@5  precision@5  MRR     nDCG@5
+hybrid     0.4000  0.0800  0.3250  0.3431
+vector     0.4000  0.0800  0.3250  0.3431
+random     0.0000  0.0000  0.0000  0.0000
+
+finance n=10 corpus_size=280
+recall@5 hybrid vs vector wins=0 losses=0 ties=10
+recall@5 hybrid vs random wins=3 losses=0 ties=7
+method     recall@5  precision@5  MRR     nDCG@5
+hybrid     0.3000  0.0600  0.3000  0.3000
+vector     0.3000  0.0600  0.3000  0.3000
+random     0.0000  0.0000  0.0000  0.0000
+
+permission_trap n=5 corpus_size=280 metric=leak
+leak hybrid vs vector wins=0 losses=0 ties=5
+leak hybrid vs random wins=0 losses=0 ties=5
+hybrid 0.0000
+vector 0.0000
+random 0.0000
+
+unanswerable n=5 corpus_size=280 metric=absent_hit
+absent_hit hybrid vs vector wins=0 losses=0 ties=5
+absent_hit hybrid vs random wins=0 losses=0 ties=5
+hybrid 0.0000
+vector 0.0000
+random 0.0000
+```
+
+Hybrid versus vector is 42 ties on answerable recall@5. The recall, precision, MRR, and nDCG columns match the vector row in every group. `websearch_to_tsquery` ANDs the words that remain after English stop-words, so 45 of the 52 scored questions had an empty keyword list. The 7 nonempty lists are `a02`, `a04`, `a08`, `a13`, `a16`, `a17`, and `p04` in `reports/retrieval.json`. None of them is a paraphrase. The top 5 changed for `a02` and `a17`. Those two changes left recall, MRR, and nDCG where the vector list had them. Leak and absent-hit stay 0.
 
 `docker compose` targets are one line each. Every Python target is one `python -m ...` call, so the same Makefile works in PowerShell, Scoop's GNU Make, and CI.
 
@@ -137,7 +222,7 @@ Torch is installed from the CPU index in `requirements-torch.txt` before the loc
 ## Layout
 
 - `data/corpus/{public,agent,finance}` — synthetic knowledge base. `synthetic: true` is required on every file. `tools/expand_corpus.py` rewrites the long near-duplicate pages.
-- Retrieval embeds the document title, the heading path, and the chunk text (`src/supportdesk/embed_text.py`). The stored chunk text stays the body. Queries get the BGE instruction prefix. Vectors are L2-normalized. Search is exact cosine distance with `access_level = ANY(...)`. There is no HNSW index.
+- Retrieval embeds the document title, the heading path, and the chunk text (`src/supportdesk/embed_text.py`). The stored chunk text stays the body. Queries get the BGE instruction prefix. Vectors are L2-normalized. Search is exact cosine distance with `access_level = ANY(...)`. Keyword search uses that same filter. Hybrid keeps 5 after reciprocal rank fusion of the two top-20 lists. There is no HNSW index.
 - `src/supportdesk/ingest` — loaders, a 400-token chunker with 60 tokens of overlap, and hash-based re-ingest.
 - Chunk ids are `{doc_slug}#{ordinal}` and stay put while the file bytes and the chunker version stay put.
 
@@ -145,4 +230,4 @@ Model ids live in configuration (`GENERATOR_MODEL`, `JUDGE_MODEL`). The judge id
 
 ## Not in this phase
 
-Hybrid search, reranking, RBAC enforcement, the agent loop, failure handling, observability, and cost tracking. Exact response caching comes before any semantic cache or model routing, and only after Phases 1 through 8.
+Reranking, RBAC enforcement, the agent loop, failure handling, observability, and cost tracking. Exact response caching comes before any semantic cache or model routing, and only after Phases 1 through 8.
