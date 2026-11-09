@@ -4,4 +4,5 @@ def main() -> None:
     print("  python -m supportdesk.ingest")
     print("  python -m supportdesk.manifest")
     print("  python -m supportdesk.eval")
+    print("  python -m supportdesk.token <customer|agent|finance>")
     print("API: python -m uvicorn supportdesk.main:app --reload")

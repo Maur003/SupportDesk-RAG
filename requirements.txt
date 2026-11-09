@@ -1,5 +1,6 @@
 # Runtime lock. Install requirements-torch.txt first so the CPU torch wheel is not replaced.
-# Direct: fastapi, uvicorn, pydantic-settings, SQLAlchemy, psycopg, pgvector, alembic, pypdf, sentence-transformers.
+# Direct: fastapi, uvicorn, pydantic-settings, SQLAlchemy, psycopg, pgvector, alembic, pypdf,
+# sentence-transformers, PyJWT. PyJWT checks the HS256 signature and expiry on the role token.
 # httpx2 and httpcore2 stay: huggingface_hub 2.4 imports them to download the tokenizer.
 # They are a different project from httpx, which is a dev dependency (TestClient) in requirements-dev.txt.
 # The pins below include the direct packages and their transitive dependencies.
@@ -39,6 +40,7 @@ pydantic==2.14.3
 pydantic-settings==2.16.2
 pydantic_core==2.50.4
 Pygments==2.21.0
+PyJWT==2.10.1
 pypdf==7.0.0
 python-dotenv==1.2.4
 PyYAML==6.0.3

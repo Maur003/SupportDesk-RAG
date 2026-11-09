@@ -7,6 +7,9 @@ from pydantic_settings import BaseSettings, SettingsConfigDict
 # Revision is the Hub commit already in the local tokenizer cache. "main" is not allowed.
 BGE_SMALL_DIMENSIONS = 384
 EMBEDDING_REVISION = "5c38ec7c405ec4b44b94cc5a9bb96e735b38267a"
+# Hub id. model_info resolves the hyphenated L-6 name to this repo.
+RERANK_MODEL = "cross-encoder/ms-marco-MiniLM-L6-v2"
+RERANK_REVISION = "233902d25c440f23af6f7d6e94d2946bac0bee0a"
 
 
 class Settings(BaseSettings):
@@ -28,12 +31,16 @@ class Settings(BaseSettings):
     embedding_model: str = "BAAI/bge-small-en-v1.5"
     embedding_revision: str = EMBEDDING_REVISION
     embedding_dimensions: int = BGE_SMALL_DIMENSIONS
+    rerank_enabled: bool = True
+    rerank_model: str = RERANK_MODEL
+    rerank_revision: str = RERANK_REVISION
     chunk_token_budget: int = 400
     chunk_overlap_tokens: int = 60
     generator_model: str = "gemini-3.8-flash"
     judge_model: str = "gemini-2.5-flash"
     judge_temperature: float = 0.0
     gemini_api_key: str = ""
+    jwt_secret: str = "supportdesk-dev-secret"
 
     @model_validator(mode="after")
     def check_models_and_chunks(self) -> "Settings":
@@ -49,13 +56,16 @@ class Settings(BaseSettings):
             raise ValueError(
                 "embedding_dimensions must stay 384 until a migration rebuilds the vector column"
             )
-        if len(self.embedding_revision) != 40 or any(
-            char not in "0123456789abcdef" for char in self.embedding_revision
-        ):
-            raise ValueError(
-                "embedding_revision must be a 40-character commit id, not a branch name"
-            )
+        if not self.jwt_secret.strip():
+            raise ValueError("jwt_secret must not be empty")
+        _require_commit(self.embedding_revision, "embedding_revision")
+        _require_commit(self.rerank_revision, "rerank_revision")
         return self
+
+
+def _require_commit(value: str, field: str) -> None:
+    if len(value) != 40 or any(char not in "0123456789abcdef" for char in value):
+        raise ValueError(f"{field} must be a 40-character commit id, not a branch name")
 
 
 @lru_cache

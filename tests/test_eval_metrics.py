@@ -19,15 +19,33 @@ def _report(
                 "group": "answerable",
                 "vector": {"recall_at_5": recall},
                 "hybrid": {"recall_at_5": recall},
+                "rerank": {"recall_at_5": recall},
             },
-            {"group": "permission_trap", "vector": leak, "hybrid": hybrid_leak},
-            {"group": "unanswerable", "vector": absent_hit, "hybrid": hybrid_absent_hit},
+            {
+                "group": "permission_trap",
+                "vector": leak,
+                "hybrid": hybrid_leak,
+                "rerank": hybrid_leak,
+            },
+            {
+                "group": "unanswerable",
+                "vector": absent_hit,
+                "hybrid": hybrid_absent_hit,
+                "rerank": hybrid_absent_hit,
+            },
         ]
     }
 
 
 def test_floor_accepts_a_recall_above_the_guard() -> None:
     enforce_floors(_report(0.6310))
+
+
+def test_floor_rejects_a_collapsed_rerank_recall() -> None:
+    report = _report(0.7024)
+    report["tables"][0]["rerank"]["recall_at_5"] = 0.54
+    with pytest.raises(SystemExit):
+        enforce_floors(report)
 
 
 def test_floor_rejects_a_collapsed_hybrid_recall() -> None:

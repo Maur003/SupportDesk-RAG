@@ -144,3 +144,71 @@ def hybrid_search(
         chunk_id for chunk_id, _rank in keyword_search(session, query, allowed, candidate_k)
     ]
     return fuse_rankings([vector_ids, keyword_ids])[:k]
+
+
+def candidate_lists(
+    session: Session,
+    query: str,
+    query_vector: list[float],
+    allowed: tuple[str, ...],
+    candidate_k: int = CANDIDATE_K,
+) -> tuple[list[str], list[str], list[str]]:
+    """Vector ids, keyword ids, and the fused ids capped at `candidate_k`."""
+
+    vector_ids = [
+        chunk_id
+        for chunk_id, _distance in search_chunks(session, query_vector, allowed, candidate_k)
+    ]
+    keyword_ids = [
+        chunk_id for chunk_id, _rank in keyword_search(session, query, allowed, candidate_k)
+    ]
+    fused = [chunk_id for chunk_id, _score in fuse_rankings([vector_ids, keyword_ids])]
+    return vector_ids, keyword_ids, fused[:candidate_k]
+
+
+def rerank_order(chunk_ids: list[str], logits: list[float], k: int) -> list[str]:
+    """Highest raw logit first. Equal logits break on chunk id."""
+
+    if k < 1:
+        raise ValueError("k must be positive")
+    if len(chunk_ids) != len(logits):
+        raise ValueError("logits must match the candidate list")
+    ranked = sorted(
+        zip(chunk_ids, logits, strict=True),
+        key=lambda item: (-item[1], item[0]),
+    )
+    return [chunk_id for chunk_id, _logit in ranked[:k]]
+
+
+def search(
+    session: Session,
+    query: str,
+    query_vector: list[float],
+    allowed: tuple[str, ...],
+    reranker: object,
+    *,
+    k: int = RETRIEVAL_K,
+    candidate_k: int = CANDIDATE_K,
+    rerank_enabled: bool = True,
+) -> list[str]:
+    """Return k chunk ids. The flag selects reranked fusion or the RRF cutoff.
+
+    Candidates are already limited by `access_level = ANY(:allowed)`. The
+    reranker does not see chunks outside that list.
+    """
+
+    if k < 1:
+        raise ValueError("k must be positive")
+    _vector_ids, _keyword_ids, fused = candidate_lists(
+        session, query, query_vector, allowed, candidate_k
+    )
+    if not rerank_enabled:
+        return fused[:k]
+    rows = session.scalars(select(Chunk).where(Chunk.id.in_(fused))).all()
+    by_id = {row.id: row for row in rows}
+    passages = [
+        embedding_input(by_id[chunk_id].title, by_id[chunk_id].heading_path, by_id[chunk_id].text)
+        for chunk_id in fused
+    ]
+    logits = reranker.score(query, passages)
+    return rerank_order(fused, logits, k)
